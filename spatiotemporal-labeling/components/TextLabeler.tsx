@@ -127,7 +127,7 @@ export default function TextLabeler({ stemText, spans, onAddSpan, onDeleteSpan }
           const isHovered = hoveredSegment === segKey;
           const actions = getHoverActions(seg);
 
-          return (
+            return (
             <mark
               key={segKey}
               onMouseEnter={() => setHoveredSegment(segKey)}
