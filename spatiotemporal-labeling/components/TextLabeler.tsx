@@ -54,7 +54,8 @@ export default function TextLabeler({ stemText, spans, onAddSpan, onDeleteSpan }
     preRange.setStart(container, 0);
     preRange.setEnd(range.startContainer, range.startOffset);
     const charStart = preRange.toString().length;
-    const charEnd = charStart + range.toString().length;
+    const trimmedLength = range.toString().trim().length;
+    const charEnd = charStart + trimmedLength;
     const spanText = range.toString().trim();
 
     if (!spanText) return;
@@ -107,16 +108,15 @@ export default function TextLabeler({ stemText, spans, onAddSpan, onDeleteSpan }
           background: 'var(--surface-alt)',
         }}
       >
-        {segments.map((seg, idx) => {
+        {segments.map((seg) => {
           if (seg.spans.length === 0) {
-            return <span key={idx}>{seg.text}</span>;
+            return <span key={`${seg.start}-${seg.end}`}>{seg.text}</span>;
           }
-          // Use the outermost / first span for color
           const s = seg.spans[0];
           const colors = LABEL_COLORS[s.label_type];
           return (
             <mark
-              key={idx}
+              key={`${seg.start}-${seg.end}`}
               title={`${s.seq_label}: ${s.span_text}`}
               style={{
                 background: colors.bg,
@@ -128,25 +128,6 @@ export default function TextLabeler({ stemText, spans, onAddSpan, onDeleteSpan }
               }}
             >
               {seg.text}
-              <span
-                style={{
-                  fontSize: 10,
-                  fontWeight: 700,
-                  color: colors.text,
-                  marginLeft: 4,
-                  marginRight: 4,
-                  padding: '1px 3px',
-                  borderRadius: 3,
-                  background: 'rgba(255, 255, 255, 0.75)',
-                  border: `1px solid ${colors.border}`,
-                  display: 'inline-block',
-                  verticalAlign: 'middle',
-                  lineHeight: 1,
-                  userSelect: 'none',
-                }}
-              >
-                {s.seq_label}
-              </span>
             </mark>
           );
         })}
@@ -177,7 +158,7 @@ export default function TextLabeler({ stemText, spans, onAddSpan, onDeleteSpan }
                 >
                   <span style={{ fontWeight: 700, color: colors.text }}>{s.seq_label}</span>
                   <span style={{ color: '#374151', maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    "{s.span_text}"
+                    &ldquo;{s.span_text}&rdquo;
                   </span>
                   <button
                     onClick={() => onDeleteSpan(s.id)}
