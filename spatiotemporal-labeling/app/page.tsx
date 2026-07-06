@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { createSession, listSessions, deleteSession, exportCsvUrl, exportJsonUrl } from '@/lib/api';
+import { createSession, listSessions, deleteSession, exportCsvUrl, exportJsonUrl, exportSessionJson } from '@/lib/api';
 import { Session } from '@/lib/types';
 
 export default function LandingPage() {
@@ -46,6 +46,22 @@ export default function LandingPage() {
     if (!confirm('Delete this session?')) return;
     await deleteSession(id).catch(() => {});
     setSessions(s => s.filter(x => x.id !== id));
+  };
+
+  const handleExport = async (id: number) => {
+    try {
+      const blob = await exportSessionJson(id);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `session_${id}.json`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      console.error(e);
+    }
   };
 
   return (
@@ -200,21 +216,28 @@ export default function LandingPage() {
                     </span>
                   </td>
                   <td style={tdStyle}>{new Date(s.created_at).toLocaleDateString()}</td>
-                  <td style={tdStyle}>
-                    <button
-                      onClick={() => router.push(`/annotate/${s.id}`)}
-                      style={btnStyle('var(--info-bg)', 'var(--info)')}
-                    >
-                      Open
-                    </button>
-                    {' '}
-                    <button
-                      onClick={() => handleDelete(s.id)}
-                      style={btnStyle('var(--error-bg)', 'var(--error)')}
-                    >
-                      Delete
-                    </button>
-                  </td>
+                   <td style={tdStyle}>
+                     <button
+                       onClick={() => router.push(`/annotate/${s.id}`)}
+                       style={btnStyle('var(--info-bg)', 'var(--info)')}
+                     >
+                       Open
+                     </button>
+                     {' '}
+                     <button
+                       onClick={() => handleExport(s.id)}
+                       style={btnStyle('var(--info-bg)', 'var(--info)')}
+                     >
+                       ↓
+                     </button>
+                     {' '}
+                     <button
+                       onClick={() => handleDelete(s.id)}
+                       style={btnStyle('var(--error-bg)', 'var(--error)')}
+                     >
+                       Delete
+                     </button>
+                   </td>
                 </tr>
               ))}
             </tbody>

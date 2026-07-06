@@ -332,9 +332,36 @@ async def export_json():
             s["id"]
         )
         result.append({
-            **{k: str(v) if hasattr(v, 'isoformat') else v for k, v in dict(s).items()},
-            "spans": [dict(sp) for sp in spans],
+            **{k: _serialize(v) for k, v in dict(s).items()},
+            "spans": [{k: _serialize(v) for k, v in dict(sp).items()} for sp in spans],
             "matrix": json.loads(snapshot["matrix_json"]) if snapshot else [],
             "span_order": json.loads(snapshot["span_order"]) if snapshot else [],
         })
     return result
+
+
+def _serialize(value):
+    if hasattr(value, 'isoformat'):
+        return value.isoformat()
+    return value
+
+@app.get("/sessions/{session_id}/export")
+async def export_session(session_id: int):
+    pool = await get_pool()
+    session = await _get_session_or_404(pool, session_id)
+    spans = await _get_spans(pool, session_id)
+    snapshot = await pool.fetchrow(
+        "SELECT * FROM matrix_snapshots WHERE session_id=$1 ORDER BY updated_at DESC LIMIT 1",
+        session_id
+    )
+    payload = {
+        **{k: _serialize(v) for k, v in dict(session).items()},
+        "spans": [{k: _serialize(v) for k, v in dict(sp).items()} for sp in spans],
+        "matrix": json.loads(snapshot["matrix_json"]) if snapshot else [],
+        "span_order": json.loads(snapshot["span_order"]) if snapshot else [],
+    }
+    return StreamingResponse(
+        iter([json.dumps(payload)]),
+        media_type="application/json",
+        headers={"Content-Disposition": f"attachment; filename=session_{session_id}.json"}
+    )

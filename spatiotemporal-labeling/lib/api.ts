@@ -63,3 +63,9 @@ export const overrideMatrix = (sessionId: number, i: number, j: number, relation
 // Export URLs (direct links, not fetched)
 export const exportCsvUrl = () => `${BASE}/export/csv`;
 export const exportJsonUrl = () => `${BASE}/export/json`;
+
+export const exportSessionJson = async (sessionId: number) => {
+  const res = await fetch(`${BASE}/sessions/${sessionId}/export`);
+  if (!res.ok) throw new Error(`API ${res.status}`);
+  return res.blob();
+};
