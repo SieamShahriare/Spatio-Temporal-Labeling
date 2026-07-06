@@ -40,7 +40,7 @@ const LABEL_COLORS: Record<string, { bg: string; border: string; text: string }>
 };
 
 export default function TextLabeler({ stemText, spans, onAddSpan, onDeleteSpan }: Props) {
-  const [pendingType, setPendingType] = useState<'Event' | 'Time'>('Event');
+  const [pendingType, setPendingType] = useState<'Event'>('Event');
   const [hoveredSegment, setHoveredSegment] = useState<string | null>(null);
 
   const handleMouseUp = useCallback(() => {
@@ -79,7 +79,7 @@ export default function TextLabeler({ stemText, spans, onAddSpan, onDeleteSpan }
       {/* Label type picker */}
       <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
         <span style={{ fontSize: 13, color: 'var(--text-muted)', alignSelf: 'center' }}>Label as:</span>
-        {(['Event', 'Time'] as const).map(type => (
+        {(['Event'] as const).map(type => (
           <button
             key={type}
             onClick={() => setPendingType(type)}
