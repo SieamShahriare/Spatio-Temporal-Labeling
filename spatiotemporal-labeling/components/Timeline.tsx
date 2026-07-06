@@ -10,7 +10,7 @@ interface Props {
 
 const TRACK_HEIGHT = 40;
 const TRACK_GAP = 8;
-const LABEL_WIDTH = 56;
+const LABEL_WIDTH = 220;
 const MIN_WIDTH = 5; // minimum block width in timeline units
 const TIMELINE_MIN = 0;
 const TIMELINE_MAX = 100;
@@ -39,8 +39,6 @@ export default function Timeline({ spans, onUpdateSpan }: Props) {
     const w = containerRef.current.clientWidth - LABEL_WIDTH;
     return w / (TIMELINE_MAX - TIMELINE_MIN);
   }, []);
-
-  const truncate = (text: string, maxLen: number) => text.length > maxLen ? text.slice(0, maxLen) + '…' : text;
 
   const onMouseDown = useCallback((
     e: React.MouseEvent,
@@ -118,11 +116,11 @@ export default function Timeline({ spans, onUpdateSpan }: Props) {
             <div
               key={t}
               style={{
-               flex: t === 100 ? 0 : 1,
-               fontSize: 10,
-               color: 'var(--text-disabled)',
-               borderLeft: '1px solid var(--border)',
-               paddingLeft: 2,
+                flex: t === 100 ? 0 : 1,
+                fontSize: 10,
+                color: 'var(--text-disabled)',
+                borderLeft: '1px solid var(--border)',
+                paddingLeft: 2,
               }}
             >
               {t}
@@ -144,28 +142,43 @@ export default function Timeline({ spans, onUpdateSpan }: Props) {
 
             return (
               <div key={span.id} style={{ position: 'absolute', top, left: 0, right: 0, height: TRACK_HEIGHT }}>
-                 {/* Row label */}
-                 <div
-                   style={{
-                     position: 'absolute',
-                     left: 0,
-                     width: LABEL_WIDTH,
-                     height: TRACK_HEIGHT,
-                     display: 'flex',
-                     flexDirection: 'column',
-                     alignItems: 'center',
-                     justifyContent: 'center',
-                     gap: 2,
-                     fontSize: 9,
-                     fontWeight: 700,
-                     color: colors.bg,
-                     padding: '2px 4px',
-                     lineHeight: 1.1,
-                   }}
-                 >
-                   <span>{truncate(span.seq_label, 5)}</span>
-                   <span style={{ fontSize: 8, fontWeight: 400, opacity: 0.85 }}>{truncate(span.span_text, 8)}</span>
-                 </div>
+                {/* Row label */}
+                <div
+                  style={{
+                    position: 'absolute',
+                    left: 0,
+                    width: LABEL_WIDTH,
+                    height: TRACK_HEIGHT,
+                    display: 'flex',
+                    alignItems: 'center',
+                    fontSize: 12,
+                    gap: 6,
+                    padding: '0 8px',
+                    overflow: 'hidden',
+                  }}
+                >
+                  <span
+                    style={{
+                      fontWeight: 700,
+                      color: colors.bg,
+                      flexShrink: 0,
+                    }}
+                  >
+                    {span.seq_label}
+                  </span>
+                  <span
+                    style={{
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap',
+                      color: '#6b7280',
+                      fontWeight: 400,
+                      fontSize: 11,
+                    }}
+                  >
+                    {span.span_text}
+                  </span>
+                </div>
 
                 {/* Track background */}
                 <div
@@ -174,8 +187,8 @@ export default function Timeline({ spans, onUpdateSpan }: Props) {
                     left: LABEL_WIDTH,
                     right: 0,
                     height: TRACK_HEIGHT,
-                   background: 'var(--surface-alt)',
-                   border: '1px solid var(--border)',
+                    background: 'var(--surface-alt)',
+                    border: '1px solid var(--border)',
                     borderRadius: 4,
                   }}
                 />
@@ -221,7 +234,7 @@ export default function Timeline({ spans, onUpdateSpan }: Props) {
                       borderRadius: '4px 0 0 4px',
                     }}
                   />
-                  <span style={{ pointerEvents: 'none' }}>{span.span_text}</span>
+                  <span style={{ pointerEvents: 'none' }}>{span.seq_label}</span>
                   {/* Right resize handle */}
                   <div
                     onMouseDown={e => { e.stopPropagation(); onMouseDown(e, span.id, 'resize-right'); }}
@@ -251,10 +264,10 @@ export default function Timeline({ spans, onUpdateSpan }: Props) {
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
           {localSpans.map(span => (
             <div key={span.id} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13 }}>
-               <span style={{ width: 32, fontWeight: 700, color: COLORS[span.label_type as keyof typeof COLORS]?.bg ?? 'var(--text-primary)', textAlign: 'center' }}>
-                 {truncate(span.span_text, 5)}
-               </span>
-               <label style={{ color: 'var(--text-muted)' }}>Start:</label>
+              <span style={{ width: 168, fontWeight: 700, color: COLORS[span.label_type as keyof typeof COLORS]?.bg ?? 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {span.seq_label}: {span.span_text}
+              </span>
+              <label style={{ color: 'var(--text-muted)' }}>Start:</label>
               <input
                 type="number"
                 min={0}
@@ -271,7 +284,7 @@ export default function Timeline({ spans, onUpdateSpan }: Props) {
                   fontSize: 13,
                 }}
               />
-               <label style={{ color: 'var(--text-muted)' }}>End:</label>
+              <label style={{ color: 'var(--text-muted)' }}>End:</label>
               <input
                 type="number"
                 min={0}
