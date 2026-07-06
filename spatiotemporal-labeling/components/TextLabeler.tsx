@@ -128,11 +128,12 @@ export default function TextLabeler({ stemText, spans, onAddSpan, onDeleteSpan }
           const actions = getHoverActions(seg);
 
             return (
-            <mark
+             <mark
               key={segKey}
               onMouseEnter={() => setHoveredSegment(segKey)}
               onMouseLeave={() => setHoveredSegment(null)}
               title={actions.length === 1 ? `${s.seq_label}: ${s.span_text}` : undefined}
+              data-badge={seg.spans.length === 1 ? s.seq_label : ''}
               style={{
                 background: colors.bg,
                 color: colors.text,
