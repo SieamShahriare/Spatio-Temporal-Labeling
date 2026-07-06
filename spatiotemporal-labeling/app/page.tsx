@@ -24,7 +24,7 @@ export default function LandingPage() {
   }, []);
 
   if (!mounted) {
-    return <div style={{ minHeight: '100vh', background: '#f9fafb' }} />;
+    return <div style={{ minHeight: '100vh', background: 'var(--background-page)' }} />;
   }
 
   const handleStart = async () => {
@@ -53,12 +53,12 @@ export default function LandingPage() {
       <h1 style={{ fontSize: 22, fontWeight: 700, marginBottom: 4 }}>
         Spatiotemporal Annotation Tool
       </h1>
-      <p style={{ fontSize: 14, color: '#6b7280', marginBottom: 32 }}>
+      <p style={{ fontSize: 14, color: 'var(--text-muted)', marginBottom: 32 }}>
         Label event and time spans in text, arrange them on a timeline, and compute Allen's Interval Algebra relations.
       </p>
 
       {/* New session form */}
-      <section style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: 10, padding: 24, marginBottom: 32 }}>
+      <section style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 10, padding: 24, marginBottom: 32 }}>
         <h2 style={{ fontSize: 16, fontWeight: 600, marginBottom: 16 }}>Start New Annotation</h2>
         <div style={{ marginBottom: 14 }}>
           <label style={{ display: 'block', fontSize: 13, fontWeight: 500, marginBottom: 4 }}>
@@ -73,7 +73,7 @@ export default function LandingPage() {
             style={{
               width: '100%',
               padding: '8px 12px',
-              border: '1px solid #d1d5db',
+              border: '1px solid var(--border-input)',
               borderRadius: 6,
               fontSize: 14,
               boxSizing: 'border-box',
@@ -93,7 +93,7 @@ export default function LandingPage() {
             style={{
               width: '100%',
               padding: '8px 12px',
-              border: '1px solid #d1d5db',
+              border: '1px solid var(--border-input)',
               borderRadius: 6,
               fontSize: 14,
               resize: 'vertical',
@@ -101,7 +101,7 @@ export default function LandingPage() {
             }}
           />
         </div>
-        {error && <p style={{ color: '#dc2626', fontSize: 13, marginBottom: 10 }}>{error}</p>}
+        {error && <p style={{ color: 'var(--error)', fontSize: 13, marginBottom: 10 }}>{error}</p>}
         <button
           id="start-labeling-btn"
           onClick={handleStart}
@@ -128,32 +128,32 @@ export default function LandingPage() {
           <a
             href={exportCsvUrl()}
             download
-            style={{
-              padding: '7px 16px',
-              background: '#f0fdf4',
-              border: '1px solid #86efac',
-              borderRadius: 6,
-              color: '#15803d',
-              fontWeight: 500,
-              fontSize: 13,
-              textDecoration: 'none',
-            }}
+             style={{
+               padding: '7px 16px',
+               background: 'var(--success-bg)',
+               border: '1px solid var(--success-border)',
+               borderRadius: 6,
+               color: 'var(--success)',
+               fontWeight: 500,
+               fontSize: 13,
+               textDecoration: 'none',
+             }}
           >
             ↓ Download CSV
           </a>
           <a
             href={exportJsonUrl()}
             download
-            style={{
-              padding: '7px 16px',
-              background: '#eff6ff',
-              border: '1px solid #93c5fd',
-              borderRadius: 6,
-              color: '#1d4ed8',
-              fontWeight: 500,
-              fontSize: 13,
-              textDecoration: 'none',
-            }}
+             style={{
+               padding: '7px 16px',
+               background: 'var(--info-bg)',
+               border: '1px solid var(--info-border)',
+               borderRadius: 6,
+               color: 'var(--info)',
+               fontWeight: 500,
+               fontSize: 13,
+               textDecoration: 'none',
+             }}
           >
             ↓ Download JSON
           </a>
@@ -164,13 +164,13 @@ export default function LandingPage() {
       <section>
         <h2 style={{ fontSize: 16, fontWeight: 600, marginBottom: 10 }}>Past Sessions</h2>
         {fetching ? (
-          <p style={{ color: '#9ca3af', fontSize: 14 }}>Loading…</p>
+          <p style={{ color: 'var(--text-disabled)', fontSize: 14 }}>Loading…</p>
         ) : sessions.length === 0 ? (
-          <p style={{ color: '#9ca3af', fontSize: 14 }}>No sessions yet.</p>
+          <p style={{ color: 'var(--text-disabled)', fontSize: 14 }}>No sessions yet.</p>
         ) : (
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
             <thead>
-              <tr style={{ background: '#f9fafb' }}>
+              <tr style={{ background: 'var(--surface-alt)' }}>
                 <th style={thStyle}>ID</th>
                 <th style={thStyle}>Username</th>
                 <th style={thStyle}>Text Preview</th>
@@ -181,7 +181,7 @@ export default function LandingPage() {
             </thead>
             <tbody>
               {sessions.map(s => (
-                <tr key={s.id} style={{ borderBottom: '1px solid #f3f4f6' }}>
+                <tr key={s.id} style={{ borderBottom: '1px solid var(--border)' }}>
                   <td style={tdStyle}>{s.id}</td>
                   <td style={tdStyle}>{s.username}</td>
                   <td style={{ ...tdStyle, maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -193,8 +193,8 @@ export default function LandingPage() {
                       borderRadius: 20,
                       fontSize: 11,
                       fontWeight: 600,
-                      background: s.status === 'done' ? '#dcfce7' : '#fef9c3',
-                      color: s.status === 'done' ? '#15803d' : '#92400e',
+                      background: s.status === 'done' ? 'var(--success-bg)' : 'var(--warning-bg)',
+                      color: s.status === 'done' ? 'var(--success)' : 'var(--warning-text)',
                     }}>
                       {s.status}
                     </span>
@@ -203,14 +203,14 @@ export default function LandingPage() {
                   <td style={tdStyle}>
                     <button
                       onClick={() => router.push(`/annotate/${s.id}`)}
-                      style={btnStyle('#eff6ff', '#1d4ed8')}
+                      style={btnStyle('var(--info-bg)', 'var(--info)')}
                     >
                       Open
                     </button>
                     {' '}
                     <button
                       onClick={() => handleDelete(s.id)}
-                      style={btnStyle('#fef2f2', '#dc2626')}
+                      style={btnStyle('var(--error-bg)', 'var(--error)')}
                     >
                       Delete
                     </button>
@@ -229,13 +229,13 @@ const thStyle: React.CSSProperties = {
   padding: '8px 10px',
   textAlign: 'left',
   fontWeight: 600,
-  color: '#6b7280',
-  borderBottom: '1px solid #e5e7eb',
+  color: 'var(--text-muted)',
+  borderBottom: '1px solid var(--border)',
 };
 
 const tdStyle: React.CSSProperties = {
   padding: '8px 10px',
-  color: '#374151',
+  color: 'var(--text-primary)',
 };
 
 const btnStyle = (bg: string, color: string): React.CSSProperties => ({

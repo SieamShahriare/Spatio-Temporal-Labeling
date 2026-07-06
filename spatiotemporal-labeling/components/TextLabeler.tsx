@@ -68,7 +68,7 @@ export default function TextLabeler({ stemText, spans, onAddSpan, onDeleteSpan }
     <div>
       {/* Label type picker */}
       <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
-        <span style={{ fontSize: 13, color: '#6b7280', alignSelf: 'center' }}>Label as:</span>
+        <span style={{ fontSize: 13, color: 'var(--text-muted)', alignSelf: 'center' }}>Label as:</span>
         {(['Event', 'Time'] as const).map(type => (
           <button
             key={type}
@@ -76,9 +76,9 @@ export default function TextLabeler({ stemText, spans, onAddSpan, onDeleteSpan }
             style={{
               padding: '4px 14px',
               borderRadius: 6,
-              border: `2px solid ${pendingType === type ? LABEL_COLORS[type].border : '#d1d5db'}`,
-              background: pendingType === type ? LABEL_COLORS[type].bg : '#fff',
-              color: pendingType === type ? LABEL_COLORS[type].text : '#374151',
+              border: `2px solid ${pendingType === type ? LABEL_COLORS[type].border : 'var(--border-input)'}`,
+              background: pendingType === type ? LABEL_COLORS[type].bg : 'var(--surface)',
+              color: pendingType === type ? LABEL_COLORS[type].text : 'var(--text-primary)',
               fontWeight: pendingType === type ? 600 : 400,
               cursor: 'pointer',
               fontSize: 13,
@@ -87,7 +87,7 @@ export default function TextLabeler({ stemText, spans, onAddSpan, onDeleteSpan }
             {type}
           </button>
         ))}
-        <span style={{ fontSize: 12, color: '#9ca3af', alignSelf: 'center', marginLeft: 4 }}>
+        <span style={{ fontSize: 12, color: 'var(--text-disabled)', alignSelf: 'center', marginLeft: 4 }}>
           — select text below to label
         </span>
       </div>
@@ -98,13 +98,13 @@ export default function TextLabeler({ stemText, spans, onAddSpan, onDeleteSpan }
         onMouseUp={handleMouseUp}
         style={{
           padding: 16,
-          border: '1px solid #e5e7eb',
+          border: '1px solid var(--border)',
           borderRadius: 8,
           lineHeight: 2,
           fontSize: 15,
           cursor: 'text',
           userSelect: 'text',
-          background: '#fafafa',
+          background: 'var(--surface-alt)',
         }}
       >
         {segments.map((seg, idx) => {
@@ -120,6 +120,7 @@ export default function TextLabeler({ stemText, spans, onAddSpan, onDeleteSpan }
               title={`${s.seq_label}: ${s.span_text}`}
               style={{
                 background: colors.bg,
+                color: colors.text,
                 borderBottom: `2px solid ${colors.border}`,
                 borderRadius: 3,
                 padding: '1px 2px',
@@ -154,7 +155,7 @@ export default function TextLabeler({ stemText, spans, onAddSpan, onDeleteSpan }
       {/* Span list */}
       {spans.length > 0 && (
         <div style={{ marginTop: 12 }}>
-          <div style={{ fontSize: 12, fontWeight: 600, color: '#6b7280', marginBottom: 6 }}>
+          <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-muted)', marginBottom: 6 }}>
             LABELED SPANS
           </div>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
@@ -184,7 +185,7 @@ export default function TextLabeler({ stemText, spans, onAddSpan, onDeleteSpan }
                       border: 'none',
                       background: 'none',
                       cursor: 'pointer',
-                      color: '#9ca3af',
+                      color: 'var(--text-disabled)',
                       padding: 0,
                       lineHeight: 1,
                       fontSize: 14,

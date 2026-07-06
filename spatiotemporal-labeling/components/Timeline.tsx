@@ -40,6 +40,8 @@ export default function Timeline({ spans, onUpdateSpan }: Props) {
     return w / (TIMELINE_MAX - TIMELINE_MIN);
   }, []);
 
+  const truncate = (text: string, maxLen: number) => text.length > maxLen ? text.slice(0, maxLen) + '…' : text;
+
   const onMouseDown = useCallback((
     e: React.MouseEvent,
     spanId: number,
@@ -96,7 +98,7 @@ export default function Timeline({ spans, onUpdateSpan }: Props) {
 
   if (localSpans.length === 0) {
     return (
-      <div style={{ padding: 24, textAlign: 'center', color: '#9ca3af', fontSize: 14 }}>
+      <div style={{ padding: 24, textAlign: 'center', color: 'var(--text-disabled)', fontSize: 14 }}>
         No events labeled yet. Label events in Step 1 to populate the timeline.
       </div>
     );
@@ -116,11 +118,11 @@ export default function Timeline({ spans, onUpdateSpan }: Props) {
             <div
               key={t}
               style={{
-                flex: t === 100 ? 0 : 1,
-                fontSize: 10,
-                color: '#9ca3af',
-                borderLeft: '1px solid #e5e7eb',
-                paddingLeft: 2,
+               flex: t === 100 ? 0 : 1,
+               fontSize: 10,
+               color: 'var(--text-disabled)',
+               borderLeft: '1px solid var(--border)',
+               paddingLeft: 2,
               }}
             >
               {t}
@@ -142,22 +144,28 @@ export default function Timeline({ spans, onUpdateSpan }: Props) {
 
             return (
               <div key={span.id} style={{ position: 'absolute', top, left: 0, right: 0, height: TRACK_HEIGHT }}>
-                {/* Row label */}
-                <div
-                  style={{
-                    position: 'absolute',
-                    left: 0,
-                    width: LABEL_WIDTH,
-                    height: TRACK_HEIGHT,
-                    display: 'flex',
-                    alignItems: 'center',
-                    fontSize: 12,
-                    fontWeight: 700,
-                    color: colors.bg,
-                  }}
-                >
-                  {span.seq_label}
-                </div>
+                 {/* Row label */}
+                 <div
+                   style={{
+                     position: 'absolute',
+                     left: 0,
+                     width: LABEL_WIDTH,
+                     height: TRACK_HEIGHT,
+                     display: 'flex',
+                     flexDirection: 'column',
+                     alignItems: 'center',
+                     justifyContent: 'center',
+                     gap: 2,
+                     fontSize: 9,
+                     fontWeight: 700,
+                     color: colors.bg,
+                     padding: '2px 4px',
+                     lineHeight: 1.1,
+                   }}
+                 >
+                   <span>{truncate(span.seq_label, 5)}</span>
+                   <span style={{ fontSize: 8, fontWeight: 400, opacity: 0.85 }}>{truncate(span.span_text, 8)}</span>
+                 </div>
 
                 {/* Track background */}
                 <div
@@ -166,8 +174,8 @@ export default function Timeline({ spans, onUpdateSpan }: Props) {
                     left: LABEL_WIDTH,
                     right: 0,
                     height: TRACK_HEIGHT,
-                    background: '#f9fafb',
-                    border: '1px solid #e5e7eb',
+                   background: 'var(--surface-alt)',
+                   border: '1px solid var(--border)',
                     borderRadius: 4,
                   }}
                 />
@@ -213,7 +221,7 @@ export default function Timeline({ spans, onUpdateSpan }: Props) {
                       borderRadius: '4px 0 0 4px',
                     }}
                   />
-                  <span style={{ pointerEvents: 'none' }}>{span.seq_label}</span>
+                  <span style={{ pointerEvents: 'none' }}>{span.span_text}</span>
                   {/* Right resize handle */}
                   <div
                     onMouseDown={e => { e.stopPropagation(); onMouseDown(e, span.id, 'resize-right'); }}
@@ -237,16 +245,16 @@ export default function Timeline({ spans, onUpdateSpan }: Props) {
 
       {/* Manual coordinate inputs */}
       <div style={{ marginTop: 16 }}>
-        <div style={{ fontSize: 12, fontWeight: 600, color: '#6b7280', marginBottom: 6 }}>
+        <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-muted)', marginBottom: 6 }}>
           MANUAL POSITION INPUTS
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
           {localSpans.map(span => (
             <div key={span.id} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13 }}>
-              <span style={{ width: 32, fontWeight: 700, color: COLORS[span.label_type as keyof typeof COLORS]?.bg ?? '#374151' }}>
-                {span.seq_label}
-              </span>
-              <label style={{ color: '#6b7280' }}>Start:</label>
+               <span style={{ width: 32, fontWeight: 700, color: COLORS[span.label_type as keyof typeof COLORS]?.bg ?? 'var(--text-primary)', textAlign: 'center' }}>
+                 {truncate(span.span_text, 5)}
+               </span>
+               <label style={{ color: 'var(--text-muted)' }}>Start:</label>
               <input
                 type="number"
                 min={0}
@@ -258,12 +266,12 @@ export default function Timeline({ spans, onUpdateSpan }: Props) {
                 style={{
                   width: 70,
                   padding: '2px 6px',
-                  border: '1px solid #d1d5db',
+                  border: '1px solid var(--border-input)',
                   borderRadius: 4,
                   fontSize: 13,
                 }}
               />
-              <label style={{ color: '#6b7280' }}>End:</label>
+               <label style={{ color: 'var(--text-muted)' }}>End:</label>
               <input
                 type="number"
                 min={0}
@@ -275,7 +283,7 @@ export default function Timeline({ spans, onUpdateSpan }: Props) {
                 style={{
                   width: 70,
                   padding: '2px 6px',
-                  border: '1px solid #d1d5db',
+                  border: '1px solid var(--border-input)',
                   borderRadius: 4,
                   fontSize: 13,
                 }}

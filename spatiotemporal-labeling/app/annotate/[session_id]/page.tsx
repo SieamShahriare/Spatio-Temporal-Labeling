@@ -127,9 +127,9 @@ export default function AnnotatePage() {
     }
   };
 
-  if (!mounted) return <div style={{ minHeight: '100vh', background: '#f9fafb' }} />;
-  if (loading) return <div style={{ padding: 40, fontFamily: 'system-ui', color: '#6b7280' }}>Loading session…</div>;
-  if (!session) return <div style={{ padding: 40, fontFamily: 'system-ui', color: '#dc2626' }}>{error || 'Session not found.'}</div>;
+  if (!mounted) return <div style={{ minHeight: '100vh', background: 'var(--background-page)' }} />;
+  if (loading) return <div style={{ padding: 40, fontFamily: 'system-ui', color: 'var(--text-muted)' }}>Loading session…</div>;
+  if (!session) return <div style={{ padding: 40, fontFamily: 'system-ui', color: 'var(--error)' }}>{error || 'Session not found.'}</div>;
 
   return (
     <main style={{ maxWidth: 900, margin: '0 auto', padding: '32px 20px', fontFamily: 'system-ui, sans-serif' }}>
@@ -138,14 +138,14 @@ export default function AnnotatePage() {
         <div>
           <button
             onClick={() => router.push('/')}
-            style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#6b7280', fontSize: 13, padding: 0, marginBottom: 6 }}
+            style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', fontSize: 13, padding: 0, marginBottom: 6 }}
           >
             ← Back to Landing
           </button>
           <h1 style={{ fontSize: 18, fontWeight: 700, margin: 0 }}>
             Session #{session.id} — {session.username}
           </h1>
-          <p style={{ fontSize: 13, color: '#6b7280', margin: '2px 0 0' }}>
+          <p style={{ fontSize: 13, color: 'var(--text-muted)', margin: '2px 0 0' }}>
             Status: <strong>{session.status}</strong>
           </p>
         </div>
@@ -167,14 +167,14 @@ export default function AnnotatePage() {
       </div>
 
       {error && (
-        <div style={{ background: '#fef2f2', border: '1px solid #fca5a5', borderRadius: 6, padding: '8px 12px', marginBottom: 16, fontSize: 13, color: '#dc2626' }}>
+        <div style={{ background: 'var(--error-bg)', border: '1px solid var(--error-border)', borderRadius: 6, padding: '8px 12px', marginBottom: 16, fontSize: 13, color: 'var(--error)' }}>
           {error}
-          <button onClick={() => setError('')} style={{ marginLeft: 8, background: 'none', border: 'none', cursor: 'pointer', color: '#9ca3af' }}>×</button>
+          <button onClick={() => setError('')} style={{ marginLeft: 8, background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-disabled)' }}>×</button>
         </div>
       )}
 
       {/* Step tabs */}
-      <div style={{ display: 'flex', gap: 0, marginBottom: 24, borderBottom: '2px solid #e5e7eb' }}>
+      <div style={{ display: 'flex', gap: 0, marginBottom: 24, borderBottom: '2px solid var(--border)' }}>
         {[
           { n: 1, label: 'Step 1: Label Text' },
           { n: 2, label: 'Step 2: Timeline' },
@@ -190,7 +190,7 @@ export default function AnnotatePage() {
               cursor: 'pointer',
               fontSize: 14,
               fontWeight: step === s.n ? 700 : 400,
-              color: step === s.n ? '#2563eb' : '#6b7280',
+              color: step === s.n ? '#2563eb' : 'var(--text-muted)',
               borderBottom: step === s.n ? '2px solid #2563eb' : '2px solid transparent',
               marginBottom: -2,
             }}
@@ -201,8 +201,8 @@ export default function AnnotatePage() {
       </div>
 
       {/* Stem text (always visible collapsed) */}
-      <div style={{ background: '#f9fafb', border: '1px solid #e5e7eb', borderRadius: 8, padding: 12, marginBottom: 20, fontSize: 14, color: '#374151' }}>
-        <strong style={{ fontSize: 12, color: '#6b7280', display: 'block', marginBottom: 4 }}>STEM TEXT</strong>
+      <div style={{ background: 'var(--surface-alt)', border: '1px solid var(--border)', borderRadius: 8, padding: 12, marginBottom: 20, fontSize: 14, color: 'var(--text-primary)' }}>
+        <strong style={{ fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 4 }}>STEM TEXT</strong>
         {session.stem_text}
       </div>
 
@@ -234,7 +234,7 @@ export default function AnnotatePage() {
               <button onClick={() => setStep(3)} style={nextBtnStyle}>Next: Matrix →</button>
             </div>
           </div>
-          <p style={{ fontSize: 13, color: '#6b7280', marginBottom: 12 }}>
+          <p style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 12 }}>
             Drag blocks to set positions (0–100 scale). Use the left/right handles to resize. Use manual inputs for precise values.
           </p>
           <Timeline spans={spans.filter(s => s.label_type === 'Event')} onUpdateSpan={handleUpdateSpan} />
@@ -253,7 +253,7 @@ export default function AnnotatePage() {
                 disabled={saving}
                 style={{
                   padding: '6px 14px',
-                  background: saving ? '#9ca3af' : '#2563eb',
+                   background: saving ? 'var(--text-disabled)' : '#2563eb',
                   color: '#fff',
                   border: 'none',
                   borderRadius: 6,
@@ -273,8 +273,8 @@ export default function AnnotatePage() {
               onSave={handleSaveMatrix}
             />
           ) : (
-            <div style={{ padding: 24, textAlign: 'center' }}>
-              <p style={{ color: '#6b7280', fontSize: 14 }}>
+          <div style={{ padding: 24, textAlign: 'center' }}>
+            <p style={{ color: 'var(--text-muted)', fontSize: 14 }}>
                 {spans.length === 0
                   ? 'Add spans in Step 1 first.'
                   : 'Click "Save & Recompute" to generate the matrix.'}
@@ -293,8 +293,8 @@ export default function AnnotatePage() {
 }
 
 const sectionStyle: React.CSSProperties = {
-  background: '#fff',
-  border: '1px solid #e5e7eb',
+  background: 'var(--surface)',
+  border: '1px solid var(--border)',
   borderRadius: 10,
   padding: 24,
 };
@@ -303,7 +303,7 @@ const sectionTitle: React.CSSProperties = {
   fontSize: 15,
   fontWeight: 700,
   margin: 0,
-  color: '#111827',
+  color: 'var(--text-primary)',
 };
 
 const nextBtnStyle: React.CSSProperties = {
@@ -319,9 +319,9 @@ const nextBtnStyle: React.CSSProperties = {
 
 const prevBtnStyle: React.CSSProperties = {
   padding: '6px 14px',
-  background: '#fff',
-  color: '#374151',
-  border: '1px solid #d1d5db',
+  background: 'var(--surface)',
+  color: 'var(--text-primary)',
+  border: '1px solid var(--border-input)',
   borderRadius: 6,
   cursor: 'pointer',
   fontSize: 13,
