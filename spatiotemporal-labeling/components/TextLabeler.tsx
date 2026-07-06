@@ -41,6 +41,7 @@ const LABEL_COLORS: Record<string, { bg: string; border: string; text: string }>
 
 export default function TextLabeler({ stemText, spans, onAddSpan, onDeleteSpan }: Props) {
   const [pendingType, setPendingType] = useState<'Event' | 'Time'>('Event');
+  const [hoveredSegment, setHoveredSegment] = useState<string | null>(null);
 
   const handleMouseUp = useCallback(() => {
     const selection = window.getSelection();
@@ -64,6 +65,14 @@ export default function TextLabeler({ stemText, spans, onAddSpan, onDeleteSpan }
   }, [pendingType, onAddSpan]);
 
   const segments = getSegments(stemText, spans);
+
+  const getHoverActions = (seg: Segment) => {
+    return seg.spans.map((s) => ({
+      id: s.id,
+      label: `${s.seq_label} (${s.label_type})`,
+      action: () => onDeleteSpan(s.id),
+    }));
+  };
 
   return (
     <div>
@@ -114,10 +123,16 @@ export default function TextLabeler({ stemText, spans, onAddSpan, onDeleteSpan }
           }
           const s = seg.spans[0];
           const colors = LABEL_COLORS[s.label_type];
+          const segKey = `${seg.start}-${seg.end}`;
+          const isHovered = hoveredSegment === segKey;
+          const actions = getHoverActions(seg);
+
           return (
             <mark
-              key={`${seg.start}-${seg.end}`}
-              title={`${s.seq_label}: ${s.span_text}`}
+              key={segKey}
+              onMouseEnter={() => setHoveredSegment(segKey)}
+              onMouseLeave={() => setHoveredSegment(null)}
+              title={actions.length === 1 ? `${s.seq_label}: ${s.span_text}` : undefined}
               style={{
                 background: colors.bg,
                 color: colors.text,
@@ -125,9 +140,124 @@ export default function TextLabeler({ stemText, spans, onAddSpan, onDeleteSpan }
                 borderRadius: 3,
                 padding: '1px 2px',
                 position: 'relative',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 4,
+                cursor: 'default',
               }}
             >
-              {seg.text}
+              <span>{seg.text}</span>
+              {isHovered && (
+                <span
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 2,
+                    position: 'relative',
+                    verticalAlign: 'middle',
+                    lineHeight: 1,
+                  }}
+                >
+                  {actions.length === 1 ? (
+                    <button
+                      onClick={(e) => { e.stopPropagation(); actions[0].action(); }}
+                      onMouseDown={(e) => e.preventDefault()}
+                      title="Remove span"
+                      style={{
+                        border: 'none',
+                        background: colors.border,
+                        color: '#fff',
+                        borderRadius: '50%',
+                        width: 14,
+                        height: 14,
+                        cursor: 'pointer',
+                        fontSize: 11,
+                        lineHeight: 1,
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        padding: 0,
+                        flexShrink: 0,
+                      }}
+                    >
+                      ×
+                    </button>
+                  ) : (
+                    <span
+                      style={{ position: 'relative', display: 'inline-flex' }}
+                      onMouseDown={(e) => e.preventDefault()}
+                    >
+                      <button
+                        title="Multiple labels here"
+                        style={{
+                          border: 'none',
+                          background: colors.border,
+                          color: '#fff',
+                          borderRadius: '50%',
+                          width: 14,
+                          height: 14,
+                          cursor: 'pointer',
+                          fontSize: 10,
+                          lineHeight: 1,
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          padding: 0,
+                          flexShrink: 0,
+                        }}
+                      >
+                        …
+                      </button>
+                      <span
+                        style={{
+                          display: 'none',
+                          position: 'absolute',
+                          bottom: '100%',
+                          right: 0,
+                          background: '#1f2937',
+                          color: '#fff',
+                          borderRadius: 6,
+                          padding: '4px 0',
+                          minWidth: 140,
+                          boxShadow: '0 4px 12px rgba(0,0,0,0.25)',
+                          zIndex: 50,
+                          flexDirection: 'column',
+                          gap: 0,
+                        }}
+                        className="hover-actions-dropdown"
+                      >
+                        {actions.map((a) => (
+                          <button
+                            key={a.id}
+                            onClick={() => a.action()}
+                            style={{
+                              display: 'block',
+                              width: '100%',
+                              border: 'none',
+                              background: 'transparent',
+                              color: '#f3f4f6',
+                              cursor: 'pointer',
+                              fontSize: 12,
+                              textAlign: 'left',
+                              padding: '4px 10px',
+                            }}
+                            onMouseEnter={(ev) => {
+                              const btn = ev.currentTarget as HTMLButtonElement;
+                              if (btn) btn.style.background = '#374151';
+                            }}
+                            onMouseLeave={(ev) => {
+                              const btn = ev.currentTarget as HTMLButtonElement;
+                              if (btn) btn.style.background = 'transparent';
+                            }}
+                          >
+                            Remove {a.label}
+                          </button>
+                        ))}
+                      </span>
+                    </span>
+                  )}
+                </span>
+              )}
             </mark>
           );
         })}
