@@ -3,7 +3,7 @@ Pydantic schemas for request/response models.
 """
 
 from pydantic import BaseModel
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 from datetime import datetime
 
 
@@ -23,6 +23,7 @@ class SpanCreate(BaseModel):
     char_end: int
     tl_start: float = 10.0
     tl_end: float = 30.0
+    source: str = 'manual'  # 'manual' | 'llm'
 
 
 class SpanUpdate(BaseModel):
@@ -36,6 +37,20 @@ class MatrixOverride(BaseModel):
     relation_code: int
 
 
+class ExtractEventsRequest(BaseModel):
+    text: str
+
+
+class SkippedEvent(BaseModel):
+    text: str
+    reason: str
+
+
+class ExtractEventsResponse(BaseModel):
+    events: List[Dict[str, Any]]
+    skipped: List[SkippedEvent]
+
+
 class SpanOut(BaseModel):
     id: int
     session_id: int
@@ -46,6 +61,7 @@ class SpanOut(BaseModel):
     char_end: int
     tl_start: float
     tl_end: float
+    source: str = 'manual'
     created_at: datetime
 
 

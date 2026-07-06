@@ -21,6 +21,7 @@ export interface Span {
   char_end: number;
   tl_start: number;
   tl_end: number;
+  source: 'manual' | 'llm';
   created_at: string;
 }
 

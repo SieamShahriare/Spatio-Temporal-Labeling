@@ -1,0 +1,3 @@
+ALTER TABLE spans ADD COLUMN IF NOT EXISTS source TEXT DEFAULT 'manual';
+UPDATE spans SET source = 'manual' WHERE source IS NULL;
+ALTER TABLE spans ALTER COLUMN source SET NOT NULL;

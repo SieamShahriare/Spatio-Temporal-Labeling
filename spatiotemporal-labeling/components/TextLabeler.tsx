@@ -8,6 +8,9 @@ interface Props {
   spans: Span[];
   onAddSpan: (labelType: 'Event' | 'Time', spanText: string, charStart: number, charEnd: number) => void;
   onDeleteSpan: (spanId: number) => void;
+  onExtractEvents?: (text: string) => Promise<void>;
+  extracting?: boolean;
+  skippedCount?: number;
 }
 
 interface Segment {
@@ -39,9 +42,14 @@ const LABEL_COLORS: Record<string, { bg: string; border: string; text: string }>
   Time:  { bg: '#fed7aa', border: '#f97316', text: '#c2410c' },
 };
 
-export default function TextLabeler({ stemText, spans, onAddSpan, onDeleteSpan }: Props) {
+export default function TextLabeler({ stemText, spans, onAddSpan, onDeleteSpan, onExtractEvents, extracting = false, skippedCount = 0 }: Props) {
   const [pendingType, setPendingType] = useState<'Event'>('Event');
   const [hoveredSegment, setHoveredSegment] = useState<string | null>(null);
+
+  const handleExtract = useCallback(async () => {
+    if (!onExtractEvents) return;
+    await onExtractEvents(stemText);
+  }, [onExtractEvents, stemText]);
 
   const handleMouseUp = useCallback(() => {
     const selection = window.getSelection();
@@ -76,8 +84,8 @@ export default function TextLabeler({ stemText, spans, onAddSpan, onDeleteSpan }
 
   return (
     <div>
-      {/* Label type picker */}
-      <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
+      {/* Label type picker + Use LLM */}
+      <div style={{ display: 'flex', gap: 8, marginBottom: 12, alignItems: 'center', flexWrap: 'wrap' }}>
         <span style={{ fontSize: 13, color: 'var(--text-muted)', alignSelf: 'center' }}>Label as:</span>
         {(['Event'] as const).map(type => (
           <button
@@ -97,10 +105,35 @@ export default function TextLabeler({ stemText, spans, onAddSpan, onDeleteSpan }
             {type}
           </button>
         ))}
+        {onExtractEvents && (
+          <button
+            onClick={handleExtract}
+            disabled={extracting || !stemText?.trim()}
+            style={{
+              padding: '4px 14px',
+              borderRadius: 6,
+              border: `1px solid ${extracting ? 'var(--text-disabled)' : 'var(--info-border)'}`,
+              background: extracting ? 'var(--text-disabled)' : 'var(--info-bg)',
+              color: extracting ? '#fff' : 'var(--info)',
+              fontWeight: 600,
+              cursor: extracting ? 'not-allowed' : 'pointer',
+              fontSize: 12,
+              opacity: !stemText?.trim() ? 0.5 : 1,
+            }}
+          >
+            {extracting ? 'Extracting…' : '✨ Use LLM'}
+          </button>
+        )}
         <span style={{ fontSize: 12, color: 'var(--text-disabled)', alignSelf: 'center', marginLeft: 4 }}>
           — select text below to label
         </span>
       </div>
+
+      {skippedCount > 0 && (
+        <p style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 8, marginTop: -8 }}>
+          {skippedCount} span{skippedCount !== 1 ? 's' : ''} couldn{skippedCount === 1 ? '' : "'"}t be located and were skipped.
+        </p>
+      )}
 
       {/* Text display */}
       <div
@@ -288,6 +321,18 @@ export default function TextLabeler({ stemText, spans, onAddSpan, onDeleteSpan }
                   }}
                 >
                   <span style={{ fontWeight: 700, color: colors.text }}>{s.seq_label}</span>
+                  {s.source === 'llm' && (
+                    <span style={{
+                      fontSize: 10,
+                      background: colors.border,
+                      color: '#fff',
+                      padding: '0 6px',
+                      borderRadius: 10,
+                      fontWeight: 600,
+                      lineHeight: '16px',
+                      letterSpacing: '0.03em',
+                    }}>auto</span>
+                  )}
                   <span style={{ color: '#374151', maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     &ldquo;{s.span_text}&rdquo;
                   </span>

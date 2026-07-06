@@ -39,7 +39,11 @@ export const createSpan = (sessionId: number, data: {
   char_end: number;
   tl_start?: number;
   tl_end?: number;
+  source?: string;
 }) => apiFetch(`/sessions/${sessionId}/spans`, { method: 'POST', body: JSON.stringify(data) });
+
+export const extractEvents = (text: string) =>
+  apiFetch('/api/extract-events', { method: 'POST', body: JSON.stringify({ text }) });
 
 export const updateSpan = (spanId: number, tl_start: number, tl_end: number) =>
   apiFetch(`/spans/${spanId}`, { method: 'PATCH', body: JSON.stringify({ tl_start, tl_end }) });

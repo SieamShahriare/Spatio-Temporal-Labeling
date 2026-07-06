@@ -7,7 +7,8 @@ import Timeline from '@/components/Timeline';
 import AllenMatrix from '@/components/AllenMatrix';
 import {
   getSession, createSpan, deleteSpan, updateSpan,
-  getMatrix, saveMatrix, overrideMatrix, updateSessionStatus
+  getMatrix, saveMatrix, overrideMatrix, updateSessionStatus,
+  extractEvents
 } from '@/lib/api';
 import { Session, Span, MatrixData } from '@/lib/types';
 
@@ -21,6 +22,8 @@ export default function AnnotatePage() {
   const [matrixData, setMatrixData] = useState<MatrixData | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [extracting, setExtracting] = useState(false);
+  const [skippedCount, setSkippedCount] = useState(0);
   const [error, setError] = useState('');
   const [step, setStep] = useState(1); // 1=text, 2=timeline, 3=matrix
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -75,6 +78,57 @@ export default function AnnotatePage() {
     setSpans(prev => prev.filter(s => s.id !== spanId));
     setMatrixData(null);
   }, []);
+
+  const handleExtractEvents = useCallback(async (text: string) => {
+    if (!session) return;
+    setExtracting(true);
+    setSkippedCount(0);
+    setError('');
+    try {
+      const result: { events: { label_type: string; span_text: string; char_start: number; char_end: number; tl_start: number; tl_end: number; source: string }[]; skipped: { text: string; reason: string }[] } = await extractEvents(text);
+      const events = result.events;
+      const skippedFromApi = result.skipped ?? [];
+      setSkippedCount(skippedFromApi.length);
+
+      const existingCharRanges: [number, number][] = spans
+        .filter(s => s.source !== 'llm')
+        .map(s => [s.char_start, s.char_end]);
+
+      setSpans(prev => prev.filter(s => s.source !== 'llm'));
+
+      const accepted = events.filter(ev => {
+        return !existingCharRanges.some(([s, e]) => {
+          return ev.char_start < e && ev.char_end > s;
+        });
+      });
+
+      const createdSpans: Span[] = [];
+      for (const ev of accepted) {
+        try {
+          const created = await createSpan(sessionId, {
+            label_type: ev.label_type,
+            span_text: ev.span_text,
+            char_start: ev.char_start,
+            char_end: ev.char_end,
+            tl_start: ev.tl_start,
+            tl_end: ev.tl_end,
+            source: ev.source,
+          });
+          createdSpans.push(created);
+        } catch {
+          /* skip individual failures */
+        }
+      }
+      if (createdSpans.length > 0) {
+        setSpans(prev => [...prev.filter(s => s.source !== 'llm'), ...createdSpans]);
+      }
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : 'LLM extraction failed.';
+      setError(msg);
+    } finally {
+      setExtracting(false);
+    }
+  }, [sessionId, session, spans]);
 
   // Update span positions (debounced)
   const handleUpdateSpan = useCallback((spanId: number, tlStart: number, tlEnd: number) => {
@@ -220,6 +274,9 @@ export default function AnnotatePage() {
             spans={spans}
             onAddSpan={handleAddSpan}
             onDeleteSpan={handleDeleteSpan}
+            onExtractEvents={handleExtractEvents}
+            extracting={extracting}
+            skippedCount={skippedCount}
           />
         </section>
       )}

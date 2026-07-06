@@ -165,6 +165,9 @@ export default function Timeline({ spans, onUpdateSpan }: Props) {
                     }}
                   >
                     {span.seq_label}
+                    {span.source === 'llm' && (
+                      <span style={{ fontSize: 9, opacity: 0.75, marginLeft: 3 }}> [auto]</span>
+                    )}
                   </span>
                   <span
                     style={{
@@ -234,7 +237,9 @@ export default function Timeline({ spans, onUpdateSpan }: Props) {
                       borderRadius: '4px 0 0 4px',
                     }}
                   />
-                  <span style={{ pointerEvents: 'none' }}>{span.seq_label}</span>
+                  <span style={{ pointerEvents: 'none' }}>
+                    {span.seq_label}{span.source === 'llm' ? ' [auto]' : ''}
+                  </span>
                   {/* Right resize handle */}
                   <div
                     onMouseDown={e => { e.stopPropagation(); onMouseDown(e, span.id, 'resize-right'); }}
@@ -263,10 +268,10 @@ export default function Timeline({ spans, onUpdateSpan }: Props) {
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
           {localSpans.map(span => (
-            <div key={span.id} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13 }}>
-              <span style={{ width: 168, fontWeight: 700, color: COLORS[span.label_type as keyof typeof COLORS]?.bg ?? 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                {span.seq_label}: {span.span_text}
-              </span>
+             <div key={span.id} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13 }}>
+               <span style={{ width: 168, fontWeight: 700, color: COLORS[span.label_type as keyof typeof COLORS]?.bg ?? 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                 {span.seq_label} {span.source === 'llm' && '[auto]'}{span.span_text}
+               </span>
               <label style={{ color: 'var(--text-muted)' }}>Start:</label>
               <input
                 type="number"
