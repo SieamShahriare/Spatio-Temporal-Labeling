@@ -9,7 +9,7 @@ import LabeledText from '@/components/LabeledText';
 import {
   getSession, createSpan, deleteSpan, updateSpan,
   getMatrix, saveMatrix, overrideMatrix, updateSessionStatus,
-  extractEvents
+  extractEvents, extractTimeline
 } from '@/lib/api';
 import { Session, Span, MatrixData } from '@/lib/types';
 
@@ -25,6 +25,8 @@ export default function AnnotatePage() {
   const [saving, setSaving] = useState(false);
   const [extracting, setExtracting] = useState(false);
   const [skippedCount, setSkippedCount] = useState(0);
+  const [extractingTimeline, setExtractingTimeline] = useState(false);
+  const [timelineSkippedCount, setTimelineSkippedCount] = useState(0);
   const [error, setError] = useState('');
   const [step, setStep] = useState(1); // 1=text, 2=timeline, 3=matrix
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -130,6 +132,25 @@ export default function AnnotatePage() {
       setExtracting(false);
     }
   }, [sessionId, session, spans]);
+
+  const handleExtractTimeline = useCallback(async () => {
+    if (!session) return;
+    setExtractingTimeline(true);
+    setTimelineSkippedCount(0);
+    setError('');
+    try {
+      const result: { updated: { span_id: number; seq_label: string; span_text: string; tl_start: number; tl_end: number }[]; skipped: { text: string; reason: string }[] } = await extractTimeline(sessionId);
+      setTimelineSkippedCount(result.skipped?.length ?? 0);
+      await getSession(sessionId).then((data: Session) => {
+        setSpans(data.spans ?? []);
+      });
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : 'Failed to set timeline positions.';
+      setError(msg);
+    } finally {
+      setExtractingTimeline(false);
+    }
+  }, [sessionId, session, getSession]);
 
   // Update span positions (debounced)
   const handleUpdateSpan = useCallback((spanId: number, tlStart: number, tlEnd: number) => {
@@ -297,9 +318,19 @@ export default function AnnotatePage() {
           <p style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 12, maxWidth: 1200, margin: '0 auto 12px', padding: '0 24px' }}>
             Drag blocks to set positions (0–100 scale). Use the left/right handles to resize. Use manual inputs for precise values.
           </p>
+          {timelineSkippedCount > 0 && (
+            <p style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 8, maxWidth: 1200, margin: '0 auto 12px', padding: '0 24px' }}>
+              {timelineSkippedCount} event{timelineSkippedCount !== 1 ? 's' : ''} could not be positioned and were skipped.
+            </p>
+          )}
           <div style={{ display: 'flex', gap: 24, alignItems: 'flex-start', maxWidth: 1800, margin: '0 auto' }}>
             <div style={{ flex: '1 1 65%', minWidth: 0, padding: '0 24px' }}>
-              <Timeline spans={spans.filter(s => s.label_type === 'Event')} onUpdateSpan={handleUpdateSpan} />
+              <Timeline
+                spans={spans.filter(s => s.label_type === 'Event')}
+                onUpdateSpan={handleUpdateSpan}
+                onExtractTimeline={handleExtractTimeline}
+                extractingTimeline={extractingTimeline}
+              />
             </div>
             <div style={{ flex: '1 1 35%', minWidth: 280, maxHeight: '85vh', overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 8, padding: 16, background: 'var(--surface-alt)' }}>
               <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-muted)', marginBottom: 8 }}>STEM TEXT</div>

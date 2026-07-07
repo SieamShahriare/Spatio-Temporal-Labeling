@@ -6,6 +6,8 @@ import { Span } from '@/lib/types';
 interface Props {
   spans: Span[];
   onUpdateSpan: (spanId: number, tlStart: number, tlEnd: number) => void;
+  onExtractTimeline?: () => Promise<void>;
+  extractingTimeline?: boolean;
 }
 
 const TRACK_HEIGHT = 40;
@@ -20,7 +22,7 @@ const COLORS = {
   Time:  { bg: '#f97316', border: '#c2410c', text: '#fff' },
 };
 
-export default function Timeline({ spans, onUpdateSpan }: Props) {
+export default function Timeline({ spans, onUpdateSpan, onExtractTimeline, extractingTimeline = false }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [trackWidthPx, setTrackWidthPx] = useState<number>(760);
   const [dragging, setDragging] = useState<{
@@ -115,6 +117,27 @@ export default function Timeline({ spans, onUpdateSpan }: Props) {
 
   return (
     <div>
+      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 8 }}>
+        {onExtractTimeline && (
+          <button
+            onClick={onExtractTimeline}
+            disabled={extractingTimeline}
+            style={{
+              padding: '4px 14px',
+              borderRadius: 6,
+              border: `1px solid ${extractingTimeline ? 'var(--text-disabled)' : 'var(--info-border)'}`,
+              background: extractingTimeline ? 'var(--text-disabled)' : 'var(--info-bg)',
+              color: extractingTimeline ? '#fff' : 'var(--info)',
+              fontWeight: 600,
+              cursor: extractingTimeline ? 'not-allowed' : 'pointer',
+              fontSize: 12,
+            }}
+          >
+            {extractingTimeline ? 'Setting positions…' : 'Use LLM'}
+          </button>
+        )}
+      </div>
+
       <div ref={containerRef} style={{ overflowX: 'auto' }}>
         <div style={{ display: 'flex', marginLeft: LABEL_WIDTH, marginBottom: 2 }}>
           {ticks.map(t => (

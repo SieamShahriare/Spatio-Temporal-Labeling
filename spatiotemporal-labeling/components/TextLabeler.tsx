@@ -100,7 +100,7 @@ export default function TextLabeler({ stemText, spans, onAddSpan, onDeleteSpan, 
               opacity: !stemText?.trim() ? 0.5 : 1,
             }}
           >
-            {extracting ? 'Extracting…' : '✨ Use LLM'}
+            {extracting ? 'Extracting…' : 'Detect Events'}
           </button>
         )}
         <span style={{ fontSize: 12, color: 'var(--text-disabled)', alignSelf: 'center', marginLeft: 4 }}>

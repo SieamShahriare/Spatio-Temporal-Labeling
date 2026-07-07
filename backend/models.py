@@ -37,18 +37,27 @@ class MatrixOverride(BaseModel):
     relation_code: int
 
 
-class ExtractEventsRequest(BaseModel):
-    text: str
-
-
 class SkippedEvent(BaseModel):
     text: str
     reason: str
 
 
+class ExtractEventsRequest(BaseModel):
+    text: str
+
+
 class ExtractEventsResponse(BaseModel):
     events: List[Dict[str, Any]]
     skipped: List[SkippedEvent]
+
+
+class ExtractTimelineRequest(BaseModel):
+    session_id: int
+
+
+class ExtractTimelineResponse(BaseModel):
+    updated: List[Dict[str, Any]]
+    skipped: List[Dict[str, Any]]
 
 
 class SpanOut(BaseModel):

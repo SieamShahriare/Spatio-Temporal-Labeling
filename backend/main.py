@@ -16,7 +16,8 @@ from database import get_pool, close_pool
 from models import (
     SessionCreate, SessionStatusUpdate,
     SpanCreate, SpanUpdate, MatrixOverride,
-    ExtractEventsRequest, ExtractEventsResponse
+    ExtractEventsRequest, ExtractEventsResponse,
+    ExtractTimelineRequest, ExtractTimelineResponse
 )
 from allen.relations import build_matrix, RELATION_NAMES, INVERSES
 from allen.validate import transitivity_check
@@ -61,6 +62,34 @@ SCHEMA_JSON = json.dumps({
         }
     ]
 }, indent=2)
+
+TIMELINE_SCHEMA_JSON = json.dumps({
+    "positions": [
+        {
+            "text": "verbatim event text, exactly as provided",
+            "start": 0,
+            "end": 100,
+            "reason": "short note"
+        }
+    ]
+}, indent=2)
+
+TIMELINE_SYSTEM_PROMPT = """You assign relative timeline positions to events extracted from a narrative.
+
+Given a stem text and a list of events with their verbatim texts, place each event on a
+0-100 timeline where 0 is the earliest moment any event begins and 100 is the latest
+moment any event ends. Use cues in the text like "five months earlier", "nearly a year
+ago", "the last day of January", "mid-February", "the Wednesday before", "On Saturday",
+"6 AM", durations ("trained for five months"), and ordering words ("first", "then", "before",
+"after") to decide relative positions and durations.
+
+Punctual events (an instant) -> end == start (or start + 0.5).
+Durative events (spanning time) -> width proportional to real-world duration relative
+to other events.
+
+Return the updated start and end for EACH event exactly in the order given.
+Return JSON only. No prose, no markdown fences."""
+
 
 TIMELINE_MIN = 0.0
 TIMELINE_MAX = 100.0
@@ -561,3 +590,94 @@ async def extract_events(body: ExtractEventsRequest):
             })
 
     return ExtractEventsResponse(events=accepted, skipped=skipped).model_dump()
+
+
+@app.post("/api/extract-timeline")
+async def extract_timeline(body: ExtractTimelineRequest):
+    pool = await get_pool()
+    await _get_session_or_404(pool, body.session_id)
+    event_rows = await _get_event_spans(pool, body.session_id)
+    if not event_rows:
+        return ExtractTimelineResponse(updated=[], skipped=[]).model_dump()
+
+    session_row = await pool.fetchrow("SELECT stem_text FROM annotation_sessions WHERE id=$1", body.session_id)
+    stem_text = session_row["stem_text"] if session_row else ""
+
+    events_payload = [
+        {
+            "text": r["span_text"],
+            "occurrence": 1,
+            "char_start": r["char_start"],
+            "char_end": r["char_end"],
+        }
+        for r in event_rows
+    ]
+    events_for_prompt = [
+        {"text": r["span_text"], "occurrence": 1}
+        for r in event_rows
+    ]
+
+    user_msg = (
+        f"Stem text:\n{stem_text}\n\n"
+        f"Events (in order):\n{json.dumps(events_for_prompt, indent=2)}\n\n"
+        f"Return JSON matching this schema:\n{TIMELINE_SCHEMA_JSON}"
+    )
+
+    try:
+        raw = await callLLM(TIMELINE_SYSTEM_PROMPT, user_msg)
+    except ValueError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"LLM provider error: {exc}") from exc
+
+    if not isinstance(raw, dict):
+        raise HTTPException(status_code=502, detail="LLM returned an unexpected response shape.")
+
+    positions = raw.get("positions", [])
+    if not isinstance(positions, list):
+        raise HTTPException(status_code=502, detail="LLM returned an unexpected positions list.")
+
+    pos_by_text: dict[str, dict] = {}
+    for p in positions:
+        if not isinstance(p, dict):
+            continue
+        txt = p.get("text", "")
+        if not txt:
+            continue
+        pos_by_text[txt] = p
+
+    updated = []
+    skipped = []
+
+    for r in event_rows:
+        span_id = r["id"]
+        pos = pos_by_text.get(r["span_text"])
+        if pos is None:
+            skipped.append({"text": r["span_text"], "reason": "Not found in LLM response."})
+            continue
+        start = pos.get("start")
+        end = pos.get("end")
+        if not isinstance(start, (int, float)) or not isinstance(end, (int, float)):
+            skipped.append({"text": r["span_text"], "reason": "Missing start or end value from model."})
+            continue
+        start = round(max(TIMELINE_MIN, min(TIMELINE_MAX, start)), 1)
+        end = round(max(TIMELINE_MIN, min(TIMELINE_MAX, end)), 1)
+        if end < start:
+            avg = (start + end) / 2
+            start = round(avg - MIN_WIDTH / 2, 1)
+            end = round(avg + MIN_WIDTH / 2, 1)
+        elif end == start:
+            end = round(start + MIN_WIDTH, 1)
+        await pool.execute(
+            "UPDATE spans SET tl_start=$1, tl_end=$2, source='llm' WHERE id=$3",
+            start, end, span_id
+        )
+        updated.append({
+            "span_id": span_id,
+            "seq_label": r["seq_label"],
+            "span_text": r["span_text"],
+            "tl_start": start,
+            "tl_end": end,
+        })
+
+    return ExtractTimelineResponse(updated=updated, skipped=skipped).model_dump()

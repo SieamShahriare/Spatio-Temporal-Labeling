@@ -45,6 +45,9 @@ export const createSpan = (sessionId: number, data: {
 export const extractEvents = (text: string) =>
   apiFetch('/api/extract-events', { method: 'POST', body: JSON.stringify({ text }) });
 
+export const extractTimeline = (sessionId: number) =>
+  apiFetch('/api/extract-timeline', { method: 'POST', body: JSON.stringify({ session_id: sessionId }) });
+
 export const updateSpan = (spanId: number, tl_start: number, tl_end: number) =>
   apiFetch(`/spans/${spanId}`, { method: 'PATCH', body: JSON.stringify({ tl_start, tl_end }) });
 
