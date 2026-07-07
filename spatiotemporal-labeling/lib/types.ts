@@ -201,3 +201,8 @@ export interface ExtractEventsResponse {
   skipped: Array<{ text: string; reason: string }>;
 }
 
+export interface ExtractTimelineResponse {
+  updated: Array<{ span_id: number; seq_label: string; span_text: string; tl_start: number; tl_end: number }>;
+  skipped: Array<{ text: string; reason: string }>;
+}
+

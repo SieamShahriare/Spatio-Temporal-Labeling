@@ -17,8 +17,9 @@ import {
   overrideBatchMatrix,
   markBatchStemDone,
   extractEvents,
+  extractTimeline,
 } from '@/lib/api';
-import { BatchStemDetail, BatchSpanOut, MatrixData, ExtractEventsResponse } from '@/lib/types';
+import { BatchStemDetail, BatchSpanOut, MatrixData, ExtractEventsResponse, ExtractTimelineResponse } from '@/lib/types';
 import { useAuth } from '@/lib/AuthContext';
 
 export default function AnnotateBatchStemPage() {
@@ -164,8 +165,14 @@ export default function AnnotateBatchStemPage() {
     setTimelineSkippedCount(0);
     setError('');
     try {
-      const updated = await listBatchSpans(stemId);
-      setSpans(updated);
+      const result: ExtractTimelineResponse = await extractTimeline(-stemId);
+      if (result.updated && result.updated.length > 0) {
+        setSpans(prev => prev.map(s => {
+          const upd = result.updated.find((u) => u.span_id === s.id);
+          return upd ? { ...s, tl_start: upd.tl_start, tl_end: upd.tl_end, source: 'llm' as const } : s;
+        }));
+      }
+      setTimelineSkippedCount(result.skipped?.length || 0);
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : 'Failed to set timeline positions.';
       setError(msg);
