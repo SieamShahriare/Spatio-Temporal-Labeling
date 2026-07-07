@@ -36,25 +36,17 @@ from allen.validate import transitivity_check
 from llm import callLLM
 
 
-SYSTEM_PROMPT = """You extract temporal EVENTS from a narrative and lay them out on one relative timeline.
+SYSTEM_PROMPT = """You extract temporal EVENTS from a narrative.
 
 An event is a concrete occurrence, action, or state-change that happens at a point or
 over a span of story time (e.g. "signed up for a half marathon", "started training",
 "pulled a muscle", "the race started", "crossed the finish line").
 Do NOT return bare time expressions ("first Saturday of March", "6 AM", "mid-February")
-as events â€” instead USE them to decide when events happen.
+as events — instead USE them to decide when events happen.
 
 Order events by STORY TIME, not by the order they appear in the text. Narratives jump
 around; honor cues like "five months earlier", "nearly a year ago", "the last day of
-January", "mid-February", "the Wednesday before", "On Saturday", "6 AM". Place and space
-events by when they actually occur in the story world.
-
-Use a 0-100 timeline. 0 = the earliest moment any event begins, 100 = the latest moment
-any event ends. For each event give start and end:
-- Punctual (an instant, e.g. "crossed the finish line") -> end == start (or +0.5).
-- Durative (e.g. "trained for five months", "rested for two weeks") -> width proportional
-  to its real-world duration relative to the other events.
-Relative ordering and relative durations are what matter, not exact numbers.
+January", "mid-February", "the Wednesday before", "On Saturday", "6 AM".
 
 Return the VERBATIM text of each event exactly as it appears in the source, so it can be
 located by string match. If that exact string appears more than once, give its 1-based
@@ -66,11 +58,7 @@ SCHEMA_JSON = json.dumps({
     "events": [
         {
             "text": "verbatim substring, exactly as in the source",
-            "occurrence": 1,
-            "start": 0,
-            "end": 100,
-            "kind": "punctual | durative",
-            "reason": "short note: which time cue placed it (for debugging)"
+            "occurrence": 1
         }
     ]
 }, indent=2)
@@ -1483,27 +1471,13 @@ async def extract_events(body: ExtractEventsRequest):
                 "reason": "Could not locate text in source even after whitespace normalization."
             })
             continue
-        if not isinstance(ev.get("start"), (int, float)) or not isinstance(ev.get("end"), (int, float)):
-            skipped.append({
-                "text": evt_text,
-                "reason": "Missing start or end value from model."
-            })
-            continue
         typed.append({
             "text": evt_text,
             "char_start": chars["char_start"],
             "char_end": chars["char_end"],
-            "start": ev["start"],
-            "end": ev["end"],
         })
 
-    # Step 2: normalize positions over the resolved set (order-preserving affine)
-    _normalize_positions(typed)
-
-    # Step 3: normalize punctual events to ensure end >= start
-    _ensure_end_ge_start(typed)
-
-    # Step 4: deduplicate by char overlap within this batch
+    # Step 2: deduplicate by char overlap within this batch
     accepted: list[dict] = []
     for t in typed:
         overlap = any(
@@ -1518,8 +1492,6 @@ async def extract_events(body: ExtractEventsRequest):
                 "span_text": t["text"],
                 "char_start": t["char_start"],
                 "char_end": t["char_end"],
-                "tl_start": t["start"],
-                "tl_end": t["end"],
                 "source": "llm",
             })
 

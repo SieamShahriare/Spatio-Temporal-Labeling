@@ -133,15 +133,13 @@ export default function AnnotateBatchStemPage() {
       const created: BatchSpanOut[] = [];
       for (const event of result.events) {
         try {
-          const newSpan: BatchSpanOut = await createBatchSpan(stemId, {
-            label_type: 'Event',
-            span_text: event.span_text,
-            char_start: event.char_start,
-            char_end: event.char_end,
-            tl_start: event.tl_start,
-            tl_end: event.tl_end,
-            source: 'llm',
-          });
+      const newSpan: BatchSpanOut = await createBatchSpan(stemId, {
+        label_type: 'Event',
+        span_text: event.span_text,
+        char_start: event.char_start,
+        char_end: event.char_end,
+        source: 'llm',
+      });
           created.push(newSpan);
         } catch (spanErr: unknown) {
           const detail = spanErr instanceof Error ? spanErr.message : 'Failed to create span.';
@@ -246,7 +244,7 @@ export default function AnnotateBatchStemPage() {
 
   return (
     <>
-      <main style={{ maxWidth: 900, margin: '0 auto', padding: '32px 20px', fontFamily: 'system-ui, sans-serif' }}>
+      <main style={{ maxWidth: 1400, margin: '0 auto', padding: '32px 20px', fontFamily: 'system-ui, sans-serif' }}>
         <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 24 }}>
           <div>
             <button

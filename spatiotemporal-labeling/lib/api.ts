@@ -212,7 +212,7 @@ export const extractEvents = async (text: string): Promise<ExtractEventsResponse
 };
 
 export interface ExtractEventsResponse {
-  events: Array<{ span_text: string; char_start: number; char_end: number; tl_start: number; tl_end: number }>;
+  events: Array<{ span_text: string; char_start: number; char_end: number }>;
   skipped: Array<{ text: string; reason: string }>;
 }
 
