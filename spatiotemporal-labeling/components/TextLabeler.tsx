@@ -2,6 +2,7 @@
 
 import { useState, useCallback } from 'react';
 import { Span } from '@/lib/types';
+import { getSegments, LABEL_COLORS } from './LabeledText';
 
 interface Props {
   stemText: string;
@@ -19,28 +20,6 @@ interface Segment {
   end: number;
   spans: Span[];
 }
-
-function getSegments(text: string, spans: Span[]): Segment[] {
-  if (spans.length === 0) return [{ text, start: 0, end: text.length, spans: [] }];
-
-  const boundaries = new Set<number>([0, text.length]);
-  for (const s of spans) {
-    boundaries.add(s.char_start);
-    boundaries.add(s.char_end);
-  }
-  const sorted = Array.from(boundaries).sort((a, b) => a - b);
-
-  return sorted.slice(0, -1).map((start, idx) => {
-    const end = sorted[idx + 1];
-    const covering = spans.filter(s => s.char_start <= start && s.char_end >= end);
-    return { text: text.slice(start, end), start, end, spans: covering };
-  });
-}
-
-const LABEL_COLORS: Record<string, { bg: string; border: string; text: string }> = {
-  Event: { bg: '#dbeafe', border: '#3b82f6', text: '#1d4ed8' },
-  Time:  { bg: '#fed7aa', border: '#f97316', text: '#c2410c' },
-};
 
 export default function TextLabeler({ stemText, spans, onAddSpan, onDeleteSpan, onExtractEvents, extracting = false, skippedCount = 0 }: Props) {
   const [pendingType, setPendingType] = useState<'Event'>('Event');
