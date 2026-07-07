@@ -172,7 +172,7 @@ export default function Timeline({ spans, onUpdateSpan, onExtractTimeline, extra
                   padding: '0 8px', overflow: 'hidden',
                 }}>
                   <span style={{ fontWeight: 700, color: colors.bg, flexShrink: 0 }}>
-                    {span.seq_label}{span.source === 'llm' ? ' [auto]' : ''}
+                       {span.seq_label}
                   </span>
                   <span style={{ color: '#6b7280', fontWeight: 400, fontSize: 11, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     {span.span_text}
@@ -215,7 +215,7 @@ export default function Timeline({ spans, onUpdateSpan, onExtractTimeline, extra
                     }}
                   >
                     <span style={{ pointerEvents: 'none', flexShrink: 0 }}>
-                      {span.seq_label}{span.source === 'llm' ? ' [auto]' : ''}
+                      {span.seq_label}
                     </span>
                     <div
                       onMouseDown={e => { e.stopPropagation(); onMouseDown(e, span.id, 'resize-left'); }}
@@ -249,7 +249,7 @@ export default function Timeline({ spans, onUpdateSpan, onExtractTimeline, extra
           {localSpans.map(span => (
             <div key={span.id} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13 }}>
               <span style={{ width: 168, fontWeight: 700, color: COLORS[span.label_type as keyof typeof COLORS]?.bg ?? 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                {span.seq_label} {span.source === 'llm' && '[auto]'}{span.span_text}
+                {span.seq_label} {span.span_text}
               </span>
               <label style={{ color: 'var(--text-muted)' }}>Start:</label>
               <input

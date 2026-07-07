@@ -300,18 +300,6 @@ export default function TextLabeler({ stemText, spans, onAddSpan, onDeleteSpan, 
                   }}
                 >
                   <span style={{ fontWeight: 700, color: colors.text }}>{s.seq_label}</span>
-                  {s.source === 'llm' && (
-                    <span style={{
-                      fontSize: 10,
-                      background: colors.border,
-                      color: '#fff',
-                      padding: '0 6px',
-                      borderRadius: 10,
-                      fontWeight: 600,
-                      lineHeight: '16px',
-                      letterSpacing: '0.03em',
-                    }}>auto</span>
-                  )}
                   <span style={{ color: '#374151', maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     &ldquo;{s.span_text}&rdquo;
                   </span>
