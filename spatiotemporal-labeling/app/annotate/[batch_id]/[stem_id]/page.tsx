@@ -16,8 +16,9 @@ import {
   saveBatchMatrix,
   overrideBatchMatrix,
   markBatchStemDone,
+  extractEvents,
 } from '@/lib/api';
-import { BatchStemDetail, BatchSpanOut, MatrixData } from '@/lib/types';
+import { BatchStemDetail, BatchSpanOut, MatrixData, ExtractEventsResponse } from '@/lib/types';
 import { useAuth } from '@/lib/AuthContext';
 
 export default function AnnotateBatchStemPage() {
@@ -127,15 +128,29 @@ export default function AnnotateBatchStemPage() {
     setSkippedCount(0);
     setError('');
     try {
-      await createBatchSpan(stemId, {
-        label_type: 'Event',
-        span_text: text.slice(0, 100),
-        char_start: 0,
-        char_end: Math.min(100, text.length),
-        tl_start: 10,
-        tl_end: 30,
-        source: 'llm',
-      });
+      const result: ExtractEventsResponse = await extractEvents(text);
+      const created: BatchSpanOut[] = [];
+      for (const event of result.events) {
+        try {
+          const newSpan: BatchSpanOut = await createBatchSpan(stemId, {
+            label_type: 'Event',
+            span_text: event.span_text,
+            char_start: event.char_start,
+            char_end: event.char_end,
+            tl_start: event.tl_start,
+            tl_end: event.tl_end,
+            source: 'llm',
+          });
+          created.push(newSpan);
+        } catch (spanErr: unknown) {
+          const detail = spanErr instanceof Error ? spanErr.message : 'Failed to create span.';
+          setError(prev => `${prev}\nSpan error: event=${JSON.stringify(event)} error=${detail}`.trim());
+        }
+      }
+      if (created.length > 0) {
+        setSpans(prev => [...prev, ...created]);
+      }
+      setSkippedCount(result.skipped.length);
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : 'LLM extraction failed.';
       setError(msg);

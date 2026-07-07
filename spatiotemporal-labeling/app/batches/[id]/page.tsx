@@ -240,12 +240,6 @@ export default function BatchDetailPage() {
             >
               {releasing ? 'Releasing…' : 'Release Lock Now'}
             </button>
-            <button
-              onClick={() => router.push(`/annotate/${batch.id}`)}
-              style={btnStyle('#2563eb', '#fff')}
-            >
-              Open Annotator
-            </button>
           </div>
         )}
 
@@ -295,13 +289,13 @@ export default function BatchDetailPage() {
                 </td>
                 <td style={td}>
                   <button
-                    onClick={() => {
-                      if (isExpired && bs.status !== 'done') {
-                        alert('This batch has expired. You can only review completed stems.');
-                        return;
-                      }
-                      router.push(`/annotate/${batch.id}/${bs.stem_id}`);
-                    }}
+                      onClick={() => {
+                        if (isExpired && bs.status !== 'done') {
+                          alert('This batch has expired. You can only review completed stems.');
+                          return;
+                        }
+                        router.push(`/annotate/${batch.id}/${bs.id}`);
+                      }}
                     style={btnStyle('#2563eb', '#fff')}
                   >
                     {bs.status === 'done' ? 'Review' : bs.status === 'in_progress' ? 'Continue' : 'Start'}

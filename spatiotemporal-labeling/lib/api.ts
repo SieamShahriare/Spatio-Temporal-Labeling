@@ -33,7 +33,7 @@ async function apiFetch(path: string, options?: RequestInit) {
     let detail = text;
     try {
       const parsed = JSON.parse(text);
-      detail = parsed.detail || text;
+      detail = typeof parsed.detail === 'string' ? parsed.detail : JSON.stringify(parsed.detail ?? text);
     } catch {
       // keep raw text
     }
@@ -108,7 +108,7 @@ export async function importStems(formData: FormData): Promise<{ created: number
     let detail = text;
     try {
       const parsed = JSON.parse(text);
-      detail = parsed.detail || text;
+      detail = typeof parsed.detail === 'string' ? parsed.detail : JSON.stringify(parsed.detail ?? text);
     } catch {
       // keep raw text
     }
@@ -203,8 +203,18 @@ export const createSpan = (sessionId: number, data: {
   source?: string;
 }) => apiFetch(`/sessions/${sessionId}/spans`, { method: 'POST', body: JSON.stringify(data) });
 
-export const extractEvents = (text: string) =>
-  apiFetch('/api/extract-events', { method: 'POST', body: JSON.stringify({ text }) });
+export const extractEvents = async (text: string): Promise<ExtractEventsResponse> => {
+  const res = await apiFetch('/api/extract-events', {
+    method: 'POST',
+    body: JSON.stringify({ text }),
+  });
+  return res as ExtractEventsResponse;
+};
+
+export interface ExtractEventsResponse {
+  events: Array<{ span_text: string; char_start: number; char_end: number; tl_start: number; tl_end: number }>;
+  skipped: Array<{ text: string; reason: string }>;
+}
 
 export const extractTimeline = (sessionId: number) =>
   apiFetch('/api/extract-timeline', { method: 'POST', body: JSON.stringify({ session_id: sessionId }) });
@@ -214,24 +224,3 @@ export const updateSpan = (spanId: number, tl_start: number, tl_end: number) =>
 
 export const deleteSpan = (spanId: number) =>
   apiFetch(`/spans/${spanId}`, { method: 'DELETE' });
-
-export const getMatrix = (sessionId: number) =>
-  apiFetch(`/sessions/${sessionId}/matrix`);
-
-export const saveMatrix = (sessionId: number) =>
-  apiFetch(`/sessions/${sessionId}/matrix/save`, { method: 'POST' });
-
-export const overrideMatrix = (sessionId: number, i: number, j: number, relation_code: number) =>
-  apiFetch(`/sessions/${sessionId}/matrix/override`, {
-    method: 'PATCH',
-    body: JSON.stringify({ i, j, relation_code }),
-  });
-
-export const exportCsvUrl = () => `${BASE}/export/csv`;
-export const exportJsonUrl = () => `${BASE}/export/json`;
-
-export const exportSessionJson = async (sessionId: number) => {
-  const res = await fetch(`${BASE}/sessions/${sessionId}/export`, { credentials: 'include' });
-  if (!res.ok) throw new Error(`API ${res.status}`);
-  return res.blob();
-};

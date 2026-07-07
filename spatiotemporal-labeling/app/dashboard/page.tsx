@@ -309,7 +309,7 @@ export default function DashboardPage() {
                                   onClick={() => {
                                     const first = detailData.stems?.[0];
                                     if (first) {
-                                      router.push(`/annotate/${detailData.id}/${first.stem_id}`);
+                                      router.push(`/annotate/${detailData.id}/${first.id}`);
                                     }
                                   }}
                                   style={btnStyle('#2563eb', '#fff')}
@@ -377,7 +377,7 @@ export default function DashboardPage() {
                                       {bs.status.replace('_', ' ')}
                                     </span>
                                     <button
-                                      onClick={() => router.push(`/annotate/${detailData.id}/${bs.stem_id}`)}
+                                      onClick={() => router.push(`/annotate/${detailData.id}/${bs.id}`)}
                                       style={{ ...btnStyle('#2563eb', '#fff'), marginLeft: 8, fontSize: 11, padding: '2px 10px' }}
                                     >
                                       {bs.status === 'done' ? 'Review' : bs.status === 'in_progress' ? 'Continue' : 'Start'}

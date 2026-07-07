@@ -113,7 +113,10 @@ MAX_REBOOKS = 3
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    await get_pool()
+    pool = await get_pool()
+    await pool.execute("ALTER TABLE spans DROP CONSTRAINT IF EXISTS spans_session_id_fkey")
+    await pool.execute("ALTER TABLE relations DROP CONSTRAINT IF EXISTS relations_session_id_fkey")
+    await pool.execute("ALTER TABLE matrix_snapshots DROP CONSTRAINT IF EXISTS matrix_snapshots_session_id_fkey")
     yield
     await close_pool()
 
@@ -827,7 +830,7 @@ async def create_batch(body: BatchCreate, request: Request, user=Depends(get_cur
                 """INSERT INTO batches (name, owner_id, locked_at, expires_at, rebook_count, status)
                    VALUES ($1, $2, $3, $4, 0, 'active')
                    RETURNING id, name, owner_id, created_at, locked_at, expires_at, rebook_count, status""",
-                body.name, user["id"], now.replace(tzinfo=None), expires.replace(tzinfo=None)
+                body.name, user["id"], now, expires
             )
             batch = dict(batch_row)
             for stem_id in body.stem_ids:
@@ -906,7 +909,6 @@ async def get_batch(batch_id: int, request: Request):
         """,
         batch_id
     )
-
     stems = []
     for r in bs_rows:
         stems.append({
@@ -955,7 +957,7 @@ async def rebook_batch(batch_id: int, request: Request, user=Depends(get_current
     expires = now + timedelta(hours=LOCK_HOURS)
     await pool.execute(
         "UPDATE batches SET locked_at = $1, expires_at = $2, rebook_count = rebook_count + 1 WHERE id = $3",
-        now.replace(tzinfo=None), expires.replace(tzinfo=None), batch_id
+        now, expires, batch_id
     )
     return {"ok": True, "remaining_seconds": LOCK_HOURS * 3600}
 
@@ -1056,9 +1058,9 @@ async def create_batch_span(batch_stem_id: int, body: BatchSpanCreate, request: 
     count = sum(1 for s in existing if s["label_type"] == body.label_type)
     seq_label = f"{prefix}{count + 1}"
     row = await pool.fetchrow(
-        """INSERT INTO spans (batch_stem_id, label_type, seq_label, span_text, char_start, char_end, tl_start, tl_end, source)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *""",
-        batch_stem_id, body.label_type, seq_label,
+        """INSERT INTO spans (session_id, batch_stem_id, label_type, seq_label, span_text, char_start, char_end, tl_start, tl_end, source)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *""",
+        -batch_stem_id, batch_stem_id, body.label_type, seq_label,
         body.span_text, body.char_start, body.char_end,
         body.tl_start, body.tl_end, body.source
     )
@@ -1527,13 +1529,29 @@ async def extract_events(body: ExtractEventsRequest):
 @app.post("/api/extract-timeline")
 async def extract_timeline(body: ExtractTimelineRequest):
     pool = await get_pool()
-    await _get_session_or_404(pool, body.session_id)
-    event_rows = await _get_event_spans(pool, body.session_id)
+    session_id = body.session_id
+
+    if session_id >= 0:
+        await _get_session_or_404(pool, session_id)
+        event_rows = await _get_event_spans(pool, session_id)
+        session_row = await pool.fetchrow("SELECT stem_text FROM annotation_sessions WHERE id=$1", session_id)
+        stem_text = session_row["stem_text"] if session_row else ""
+    else:
+        batch_stem_id = -session_id
+        bs = await pool.fetchrow(
+            "SELECT bs.*, s.text AS stem_text FROM batch_stems bs JOIN stems s ON s.id = bs.stem_id WHERE bs.id=$1",
+            batch_stem_id
+        )
+        if not bs:
+            raise HTTPException(status_code=404, detail="Batch stem not found")
+        event_rows = await pool.fetch(
+            "SELECT * FROM spans WHERE batch_stem_id = $1 AND label_type = 'Event' ORDER BY created_at",
+            batch_stem_id
+        )
+        stem_text = bs["stem_text"]
+
     if not event_rows:
         return ExtractTimelineResponse(updated=[], skipped=[]).model_dump()
-
-    session_row = await pool.fetchrow("SELECT stem_text FROM annotation_sessions WHERE id=$1", body.session_id)
-    stem_text = session_row["stem_text"] if session_row else ""
 
     events_payload = [
         {

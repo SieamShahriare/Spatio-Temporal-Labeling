@@ -184,7 +184,7 @@ class BatchStemOut(BaseModel):
 # ---------------------------------------------------------------------------
 
 class BatchSpanCreate(BaseModel):
-    batch_stem_id: int
+    batch_stem_id: Optional[int] = None
     label_type: str
     span_text: str
     char_start: int

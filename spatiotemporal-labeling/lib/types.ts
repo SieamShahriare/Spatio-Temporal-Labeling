@@ -190,3 +190,14 @@ export interface BatchStemDetail {
   spans: BatchSpanOut[];
   expires_at: string;
 }
+
+export interface SkippedEvent {
+  text: string;
+  reason: string;
+}
+
+export interface ExtractEventsResponse {
+  events: Array<{ span_text: string; char_start: number; char_end: number; tl_start: number; tl_end: number }>;
+  skipped: Array<{ text: string; reason: string }>;
+}
+
