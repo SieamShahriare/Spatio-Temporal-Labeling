@@ -136,6 +136,11 @@ class StemsListResponse(BaseModel):
     page_size: int
 
 
+class StemsImportResponse(BaseModel):
+    created: int
+    skipped: int
+
+
 # ---------------------------------------------------------------------------
 # Batch models
 # ---------------------------------------------------------------------------

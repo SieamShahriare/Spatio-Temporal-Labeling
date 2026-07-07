@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { listStems, createBatch } from '@/lib/api';
+import { listStems, createBatch, importStems } from '@/lib/api';
 import { StemOut, StemsListResponse } from '@/lib/types';
 import { useAuth } from '@/lib/AuthContext';
 
@@ -73,6 +73,48 @@ function statusBadge(s: StemOut) {
   return <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{s.state}</span>;
 }
 
+function parseTextarea(text: string): string[] {
+  if (!text.trim()) return [];
+  return text.split(/\n\s*\n/).map(t => t.trim()).filter(t => t.length > 0);
+}
+
+function parseFileContent(text: string, filename: string): string[] {
+  const ext = filename.split('.').pop()?.toLowerCase() || '';
+  if (ext === 'txt') {
+    return parseTextarea(text);
+  }
+  if (ext === 'csv') {
+    const lines = text.split('\n');
+    if (lines.length < 2) return [];
+    const header = lines[0].toLowerCase().split(',').map(h => h.trim());
+    const textIdx = header.indexOf('text');
+    if (textIdx === -1) return [];
+    const results: string[] = [];
+    for (let i = 1; i < lines.length; i++) {
+      const cols = lines[i].split(',');
+      if (cols.length > textIdx) {
+        const t = cols[textIdx].trim();
+        if (t) results.push(t);
+      }
+    }
+    return results;
+  }
+  if (ext === 'json') {
+    try {
+      const data = JSON.parse(text) as Array<string | { text?: string }>;
+      if (!Array.isArray(data)) return [];
+      return data.map((item) => {
+        if (typeof item === 'string') return item.trim();
+        if (item && typeof item.text === 'string') return item.text.trim();
+        return '';
+      }).filter((t): t is string => t.length > 0);
+    } catch {
+      return [];
+    }
+  }
+  return [];
+}
+
 export default function StemsPage() {
   const router = useRouter();
   const { user, loading: authLoading } = useAuth();
@@ -88,6 +130,11 @@ export default function StemsPage() {
   const [error, setError] = useState('');
   const [conflicts, setConflicts] = useState<Set<number>>(new Set());
   const [refreshKey, setRefreshKey] = useState(0);
+  const [showImport, setShowImport] = useState(false);
+  const [importText, setImportText] = useState('');
+  const [importFile, setImportFile] = useState<File | null>(null);
+  const [importParsed, setImportParsed] = useState<string[]>([]);
+  const [importing, setImporting] = useState(false);
 
   const pageSize = 20;
 
@@ -165,6 +212,49 @@ export default function StemsPage() {
     }
   };
 
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setImportFile(file);
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const text = ev.target?.result as string;
+      const parsed = parseFileContent(text, file.name);
+      setImportParsed(parsed);
+    };
+    reader.readAsText(file);
+  };
+
+  const textareaTexts = parseTextarea(importText);
+  const allImportTexts = [...textareaTexts, ...importParsed];
+
+  const handleImport = async () => {
+    if (allImportTexts.length === 0) return;
+    setImporting(true);
+    setError('');
+    try {
+      const formData = new FormData();
+      if (textareaTexts.length > 0) {
+        formData.append('texts', JSON.stringify(textareaTexts));
+      }
+      if (importFile) {
+        formData.append('file', importFile);
+      }
+      const result = await importStems(formData);
+      setShowImport(false);
+      setImportText('');
+      setImportFile(null);
+      setImportParsed([]);
+      setRefreshKey(k => k + 1);
+      setError(`Imported: ${result.created} created, ${result.skipped} skipped`);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : 'Import failed.';
+      setError(msg);
+    } finally {
+      setImporting(false);
+    }
+  };
+
   if (authLoading) {
     return <div style={{ minHeight: '100vh', background: 'var(--background-page)' }} />;
   }
@@ -184,6 +274,21 @@ export default function StemsPage() {
             {total} stems · {status === 'available' ? 'select rows to book' : 'read-only catalog'}
           </p>
         </div>
+        <button
+          onClick={() => setShowImport(true)}
+          style={{
+            padding: '8px 16px',
+            background: '#2563eb',
+            color: '#fff',
+            border: 'none',
+            borderRadius: 6,
+            cursor: 'pointer',
+            fontWeight: 600,
+            fontSize: 13,
+          }}
+        >
+          Add stems
+        </button>
       </div>
 
       {error && (
@@ -356,6 +461,141 @@ export default function StemsPage() {
           >
             Next →
           </button>
+        </div>
+      )}
+
+      {showImport && (
+        <div style={{
+          position: 'fixed',
+          inset: 0,
+          background: 'rgba(0,0,0,0.5)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 1000,
+        }}>
+          <div style={{
+            background: 'var(--surface)',
+            border: '1px solid var(--border)',
+            borderRadius: 10,
+            padding: 24,
+            width: '100%',
+            maxWidth: 560,
+            maxHeight: '90vh',
+            overflow: 'auto',
+          }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+              <h2 style={{ fontSize: 16, fontWeight: 700, margin: 0 }}>Add stems</h2>
+              <button
+                onClick={() => setShowImport(false)}
+                style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 18, color: 'var(--text-muted)' }}
+              >×</button>
+            </div>
+
+            <textarea
+              value={importText}
+              onChange={e => setImportText(e.target.value)}
+              placeholder="Paste passages here — separate each passage with a blank line."
+              style={{
+                width: '100%',
+                minHeight: 140,
+                padding: 10,
+                border: '1px solid var(--border-input)',
+                borderRadius: 6,
+                fontSize: 13,
+                fontFamily: 'system-ui, sans-serif',
+                boxSizing: 'border-box',
+                resize: 'vertical',
+                marginBottom: 12,
+              }}
+            />
+
+            <div style={{ marginBottom: 16 }}>
+              <label style={{
+                display: 'inline-block',
+                padding: '8px 16px',
+                background: 'var(--surface-alt)',
+                border: '1px solid var(--border)',
+                borderRadius: 6,
+                cursor: 'pointer',
+                fontSize: 13,
+                fontWeight: 500,
+              }}>
+                {importFile ? `File: ${importFile.name}` : 'Choose file (.txt / .csv / .json)'}
+                <input
+                  type="file"
+                  accept=".txt,.csv,.json"
+                  onChange={handleFileChange}
+                  style={{ display: 'none' }}
+                />
+              </label>
+              {importFile && (
+                <button
+                  onClick={() => { setImportFile(null); setImportParsed([]); }}
+                  style={{
+                    marginLeft: 8,
+                    background: 'none',
+                    border: 'none',
+                    cursor: 'pointer',
+                    color: 'var(--text-muted)',
+                    fontSize: 12,
+                    textDecoration: 'underline',
+                  }}
+                >
+                  Clear
+                </button>
+              )}
+            </div>
+
+            <div style={{
+              background: 'var(--surface-alt)',
+              border: '1px solid var(--border)',
+              borderRadius: 6,
+              padding: 12,
+              marginBottom: 16,
+              fontSize: 13,
+            }}>
+              <strong>{allImportTexts.length} stem{allImportTexts.length !== 1 ? 's' : ''} detected</strong>
+              {allImportTexts.length > 0 && (
+                <div style={{ marginTop: 8, color: 'var(--text-muted)' }}>
+                  {allImportTexts.slice(0, 3).map((t, i) => (
+                    <div key={i} style={{ marginBottom: 4, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      {i + 1}. {t.slice(0, 80)}{t.length > 80 ? '…' : ''}
+                    </div>
+                  ))}
+                  {allImportTexts.length > 3 && (
+                    <div style={{ color: 'var(--text-muted)' }}>…and {allImportTexts.length - 3} more</div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+              <button
+                onClick={() => setShowImport(false)}
+                disabled={importing}
+                style={btnStyle('var(--surface)', 'var(--text-primary)')}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleImport}
+                disabled={importing || allImportTexts.length === 0}
+                style={{
+                  padding: '8px 20px',
+                  background: importing || allImportTexts.length === 0 ? 'var(--text-disabled)' : '#2563eb',
+                  color: '#fff',
+                  border: 'none',
+                  borderRadius: 6,
+                  cursor: importing || allImportTexts.length === 0 ? 'not-allowed' : 'pointer',
+                  fontWeight: 600,
+                  fontSize: 13,
+                }}
+              >
+                {importing ? 'Importing…' : `Import ${allImportTexts.length} stem${allImportTexts.length !== 1 ? 's' : ''}`}
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </main>

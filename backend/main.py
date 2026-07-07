@@ -8,7 +8,7 @@ import io
 from typing import Optional
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, Query, Request, Depends
+from fastapi import FastAPI, HTTPException, Query, Request, Depends, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, Response
 
@@ -19,14 +19,14 @@ from models import (
     ExtractEventsRequest, ExtractEventsResponse,
     ExtractTimelineRequest, ExtractTimelineResponse,
     SignupRequest, LoginRequest, UserOut, AuthMeResponse,
-    StemOut, StemsListResponse,
+    StemOut, StemsListResponse, StemsImportResponse,
     BatchCreate, BatchOut, BatchDetailOut,
     BatchSpanCreate, BatchSpanOut,
     ConflictResponse,
 )
 from auth import (
     hash_password, verify_password,
-    create_session, get_session, delete_session, get_user_by_id,
+    create_session, get_session, delete_session as delete_auth_session, get_user_by_id,
     set_session_cookies, clear_session_cookies,
     get_current_user, get_current_user_optional, validate_csrf,
 )
@@ -492,7 +492,7 @@ async def login(body: LoginRequest, response: Response):
 async def logout(request: Request, response: Response):
     token = request.cookies.get("session_token")
     if token:
-        await delete_session(token)
+        await delete_auth_session(token)
     clear_session_cookies(response)
     return None
 
@@ -676,6 +676,94 @@ async def list_stems(
         ))
 
     return StemsListResponse(items=items, total=total, page=page, page_size=page_size)
+
+
+@app.post("/stems/import")
+async def import_stems(request: Request, user=Depends(get_current_user)):
+    validate_csrf(request)
+    pool = await get_pool()
+
+    content_type = request.headers.get("content-type", "")
+    texts: list[str] = []
+
+    if "multipart/form-data" in content_type:
+        form = await request.form()
+        texts_field = form.get("texts")
+        if texts_field:
+            try:
+                raw = json.loads(texts_field)
+                if isinstance(raw, list):
+                    texts.extend([t.strip() for t in raw if isinstance(t, str) and t.strip()])
+            except json.JSONDecodeError:
+                pass
+
+        file = form.get("file")
+        if file and hasattr(file, "filename") and hasattr(file, "read"):
+            raw_bytes = await file.read()
+            filename = file.filename or ""
+            ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+            content = raw_bytes.decode("utf-8")
+
+            if ext == "txt":
+                texts.extend([t.strip() for t in content.split("\n\n") if t.strip()])
+            elif ext == "csv":
+                reader = csv.DictReader(io.StringIO(content))
+                for row in reader:
+                    txt = (row.get("text") or "").strip()
+                    if txt:
+                        texts.append(txt)
+            elif ext == "json":
+                try:
+                    data = json.loads(content)
+                    if isinstance(data, list):
+                        for item in data:
+                            if isinstance(item, str):
+                                t = item.strip()
+                                if t:
+                                    texts.append(t)
+                            elif isinstance(item, dict):
+                                t = (item.get("text") or "").strip()
+                                if t:
+                                    texts.append(t)
+                except json.JSONDecodeError:
+                    raise HTTPException(status_code=400, detail="Invalid JSON file")
+            else:
+                raise HTTPException(status_code=400, detail=f"Unsupported file type: .{ext}")
+    else:
+        try:
+            body = await request.json()
+            raw = body.get("texts", [])
+            if isinstance(raw, list):
+                texts = [t.strip() for t in raw if isinstance(t, str) and t.strip()]
+            else:
+                raise HTTPException(status_code=400, detail="Expected { texts: string[] }")
+        except Exception:
+            raise HTTPException(status_code=400, detail="Invalid request body")
+
+    if not texts:
+        return StemsImportResponse(created=0, skipped=0)
+
+    unique_texts = list(dict.fromkeys(texts))
+
+    existing_rows = await pool.fetch(
+        "SELECT text FROM stems WHERE text = ANY($1::text[])",
+        unique_texts
+    )
+    existing_set = {r["text"] for r in existing_rows}
+
+    to_insert = [t for t in unique_texts if t not in existing_set]
+    skipped = len(unique_texts) - len(to_insert)
+    created = 0
+
+    if to_insert:
+        values = [(t, len(t.split()), "upload") for t in to_insert]
+        await pool.executemany(
+            "INSERT INTO stems (text, word_count, source) VALUES ($1, $2, $3)",
+            values
+        )
+        created = len(values)
+
+    return StemsImportResponse(created=created, skipped=skipped)
 
 
 # ---------------------------------------------------------------------------

@@ -122,6 +122,11 @@ export interface StemsListResponse {
   page_size: number;
 }
 
+export interface StemsImportResponse {
+  created: number;
+  skipped: number;
+}
+
 // ====== Batch types ======
 
 export type BatchStatus = 'active' | 'released' | 'expired';

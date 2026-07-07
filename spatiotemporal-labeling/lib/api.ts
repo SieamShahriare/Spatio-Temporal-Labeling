@@ -91,6 +91,32 @@ export const listStems = (filter: StemFilter = {}) => {
   return apiFetch(`/stems${qs ? `?${qs}` : ''}`);
 };
 
+export async function importStems(formData: FormData): Promise<{ created: number; skipped: number }> {
+  const headers: Record<string, string> = {};
+  if (_csrfToken) {
+    headers['X-CSRF-Token'] = _csrfToken;
+  }
+  const res = await fetch(`${BASE}/stems/import`, {
+    method: 'POST',
+    body: formData,
+    headers,
+    credentials: 'include',
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    let detail = text;
+    try {
+      const parsed = JSON.parse(text);
+      detail = parsed.detail || text;
+    } catch {
+      // keep raw text
+    }
+    throw new Error(`API ${res.status}: ${detail}`);
+  }
+  return res.json();
+}
+
 // ====== Batches ======
 
 export const createBatch = (data: { name: string; stem_ids: number[] }) =>

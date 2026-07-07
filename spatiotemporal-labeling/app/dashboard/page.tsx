@@ -126,7 +126,7 @@ export default function DashboardPage() {
 
   return (
     <main style={{ maxWidth: 960, margin: '0 auto', padding: '32px 20px', fontFamily: 'system-ui, sans-serif' }}>
-      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 32 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 32, gap: 24 }}>
         <div>
           <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>
             Dashboard
@@ -135,7 +135,7 @@ export default function DashboardPage() {
             Welcome, {user?.username}
           </p>
         </div>
-        <div style={{ display: 'flex', gap: 8, marginLeft: 'auto' }}>
+        <div style={{ display: 'flex', gap: 8 }}>
           <button
             onClick={() => router.push('/stems')}
             style={{
