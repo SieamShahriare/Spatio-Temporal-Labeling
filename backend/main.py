@@ -6,6 +6,7 @@ import json
 import csv
 import io
 from typing import Optional
+from datetime import datetime, timezone, timedelta
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Query, Request, Depends, UploadFile, File
@@ -105,6 +106,9 @@ Return JSON only. No prose, no markdown fences."""
 TIMELINE_MIN = 0.0
 TIMELINE_MAX = 100.0
 MIN_WIDTH = 5.0
+
+LOCK_HOURS = 4
+MAX_REBOOKS = 3
 
 
 @asynccontextmanager
@@ -515,6 +519,16 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _ensure_aware(dt: datetime) -> datetime:
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+def _seconds_until(target: datetime) -> int:
+    return max(0, int((_ensure_aware(target) - _now()).total_seconds()))
+
+
 async def _require_batch_lock(batch_id: int, user: dict) -> dict:
     pool = await get_pool()
     batch = await pool.fetchrow(
@@ -523,8 +537,7 @@ async def _require_batch_lock(batch_id: int, user: dict) -> dict:
     )
     if not batch:
         raise HTTPException(status_code=404, detail="Batch not found")
-    if batch["expires_at"] <= _now().replace(tzinfo=None):
-        raise HTTPException(
+    if _ensure_aware(batch["expires_at"]) <= _now():        raise HTTPException(
             status_code=423,
             detail="Lock expired or not yours - this batch may have returned to the pool"
         )
@@ -708,8 +721,14 @@ async def import_stems(request: Request, user=Depends(get_current_user)):
                 texts.extend([t.strip() for t in content.split("\n\n") if t.strip()])
             elif ext == "csv":
                 reader = csv.DictReader(io.StringIO(content))
+                text_columns = ["text", "stem_text", "stem", "passage", "content", "story", "description"]
                 for row in reader:
-                    txt = (row.get("text") or "").strip()
+                    txt = ""
+                    for key in text_columns:
+                        val = row.get(key)
+                        if val:
+                            txt = val.strip()
+                            break
                     if txt:
                         texts.append(txt)
             elif ext == "json":
@@ -827,7 +846,7 @@ async def create_batch(body: BatchCreate, request: Request, user=Depends(get_cur
         expires_at=batch["expires_at"],
         rebook_count=batch["rebook_count"],
         status=batch["status"],
-        remaining_seconds=max(0, int((batch["expires_at"] - _now().replace(tzinfo=None)).total_seconds())),
+        remaining_seconds=_seconds_until(batch["expires_at"]),
         progress={"done": 0, "total": len(body.stem_ids)},
     )
 
@@ -858,7 +877,7 @@ async def list_batches(request: Request):
             expires_at=r["expires_at"],
             rebook_count=r["rebook_count"],
             status=r["status"],
-            remaining_seconds=max(0, int((r["expires_at"] - _now().replace(tzinfo=None)).total_seconds())),
+            remaining_seconds=_seconds_until(r["expires_at"]),
             progress={"done": done, "total": total},
         ))
     return result
@@ -893,7 +912,7 @@ async def get_batch(batch_id: int, request: Request):
         stems.append({
             "id": r["id"],
             "stem_id": r["stem_id"],
-            "text": r["stem_text"],
+            "stem_text": r["stem_text"],
             "word_count": r["word_count"],
             "status": r["status"],
             "completed_by": {"id": r["completed_by"], "username": r["completed_username"]} if r["completed_by"] else None,
@@ -914,7 +933,7 @@ async def get_batch(batch_id: int, request: Request):
         expires_at=batch["expires_at"],
         rebook_count=batch["rebook_count"],
         status=batch["status"],
-        remaining_seconds=max(0, int((batch["expires_at"] - _now().replace(tzinfo=None)).total_seconds())),
+        remaining_seconds=_seconds_until(batch["expires_at"]),
         progress={"done": done, "total": total},
         stems=stems,
     )
@@ -992,8 +1011,7 @@ async def get_batch_stem(batch_stem_id: int, request: Request):
     if not bs:
         raise HTTPException(status_code=404, detail="Batch stem not found")
     batch = await pool.fetchrow("SELECT * FROM batches WHERE id = $1", bs["batch_id"])
-    if batch["expires_at"] <= _now().replace(tzinfo=None):
-        raise HTTPException(status_code=423, detail="Lock expired")
+    if _ensure_aware(batch["expires_at"]) <= _now():        raise HTTPException(status_code=423, detail="Lock expired")
     spans = await pool.fetch(
         "SELECT * FROM spans WHERE batch_stem_id = $1 ORDER BY created_at",
         batch_stem_id
@@ -1030,8 +1048,7 @@ async def create_batch_span(batch_stem_id: int, body: BatchSpanCreate, request: 
     )
     if not bs or bs["owner_id"] != user["id"]:
         raise HTTPException(status_code=404, detail="Batch stem not found")
-    if bs["expires_at"] <= _now().replace(tzinfo=None):
-        raise HTTPException(status_code=423, detail="Lock expired")
+    if _ensure_aware(bs["expires_at"]) <= _now():        raise HTTPException(status_code=423, detail="Lock expired")
     existing = await pool.fetch(
         "SELECT * FROM spans WHERE batch_stem_id = $1 ORDER BY created_at", batch_stem_id
     )
@@ -1085,8 +1102,7 @@ async def update_batch_span(batch_stem_id: int, span_id: int, body: SpanUpdate, 
     )
     if not bs or bs["owner_id"] != user["id"]:
         raise HTTPException(status_code=404, detail="Batch stem not found")
-    if bs["expires_at"] <= _now().replace(tzinfo=None):
-        raise HTTPException(status_code=423, detail="Lock expired")
+    if _ensure_aware(bs["expires_at"]) <= _now():        raise HTTPException(status_code=423, detail="Lock expired")
     span = await pool.fetchrow("SELECT * FROM spans WHERE id = $1 AND batch_stem_id = $2", span_id, batch_stem_id)
     if not span:
         raise HTTPException(status_code=404, detail="Span not found")
@@ -1126,8 +1142,7 @@ async def save_batch_matrix(batch_stem_id: int, request: Request, user=Depends(g
     )
     if not bs or bs["owner_id"] != user["id"]:
         raise HTTPException(status_code=404, detail="Batch stem not found")
-    if bs["expires_at"] <= _now().replace(tzinfo=None):
-        raise HTTPException(status_code=423, detail="Lock expired")
+    if _ensure_aware(bs["expires_at"]) <= _now():        raise HTTPException(status_code=423, detail="Lock expired")
     spans = await pool.fetch(
         "SELECT * FROM spans WHERE batch_stem_id = $1 AND label_type = 'Event' ORDER BY created_at",
         batch_stem_id
@@ -1196,8 +1211,7 @@ async def override_batch_matrix(batch_stem_id: int, body: MatrixOverride, reques
     )
     if not bs or bs["owner_id"] != user["id"]:
         raise HTTPException(status_code=404, detail="Batch stem not found")
-    if bs["expires_at"] <= _now().replace(tzinfo=None):
-        raise HTTPException(status_code=423, detail="Lock expired")
+    if _ensure_aware(bs["expires_at"]) <= _now():        raise HTTPException(status_code=423, detail="Lock expired")
     spans = await pool.fetch(
         "SELECT * FROM spans WHERE batch_stem_id = $1 AND label_type = 'Event' ORDER BY created_at",
         batch_stem_id
@@ -1249,8 +1263,7 @@ async def mark_batch_stem_done(batch_stem_id: int, request: Request, user=Depend
     )
     if not bs or bs["owner_id"] != user["id"]:
         raise HTTPException(status_code=404, detail="Batch stem not found")
-    if bs["expires_at"] <= _now().replace(tzinfo=None):
-        raise HTTPException(status_code=423, detail="Lock expired")
+    if _ensure_aware(bs["expires_at"]) <= _now():        raise HTTPException(status_code=423, detail="Lock expired")
     await pool.execute(
         "UPDATE batch_stems SET status = 'done', completed_by = $1, completed_at = now() WHERE id = $2",
         user["id"], batch_stem_id
@@ -1268,8 +1281,7 @@ async def update_batch_stem_status(batch_stem_id: int, body: dict, request: Requ
     )
     if not bs or bs["owner_id"] != user["id"]:
         raise HTTPException(status_code=404, detail="Batch stem not found")
-    if bs["expires_at"] <= _now().replace(tzinfo=None):
-        raise HTTPException(status_code=423, detail="Lock expired")
+    if _ensure_aware(bs["expires_at"]) <= _now():        raise HTTPException(status_code=423, detail="Lock expired")
     new_status = body.get("status", "in_progress")
     if new_status not in ("not_started", "in_progress", "done"):
         raise HTTPException(status_code=400, detail="Invalid status")

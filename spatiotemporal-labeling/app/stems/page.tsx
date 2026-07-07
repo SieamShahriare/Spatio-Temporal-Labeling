@@ -78,20 +78,50 @@ function parseTextarea(text: string): string[] {
   return text.split(/\n\s*\n/).map(t => t.trim()).filter(t => t.length > 0);
 }
 
+function csvSplitLine(line: string): string[] {
+  const result: string[] = [];
+  let current = '';
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const char = line[i];
+    if (char === '"') {
+      inQuotes = !inQuotes;
+    } else if (char === ',' && !inQuotes) {
+      result.push(current);
+      current = '';
+    } else {
+      current += char;
+    }
+  }
+  result.push(current);
+  return result;
+}
+
 function parseFileContent(text: string, filename: string): string[] {
   const ext = filename.split('.').pop()?.toLowerCase() || '';
   if (ext === 'txt') {
     return parseTextarea(text);
   }
   if (ext === 'csv') {
-    const lines = text.split('\n');
+    const textClean = text.replace(/^\uFEFF/, '');
+    const lines = textClean.split(/\r?\n/);
     if (lines.length < 2) return [];
-    const header = lines[0].toLowerCase().split(',').map(h => h.trim());
-    const textIdx = header.indexOf('text');
+    const header = csvSplitLine(lines[0]).map(h => h.trim().toLowerCase());
+    const textColumns = ['text', 'stem_text', 'stem', 'passage', 'content', 'story', 'description'];
+    let textIdx = -1;
+    for (const key of textColumns) {
+      const idx = header.indexOf(key);
+      if (idx !== -1) {
+        textIdx = idx;
+        break;
+      }
+    }
     if (textIdx === -1) return [];
     const results: string[] = [];
     for (let i = 1; i < lines.length; i++) {
-      const cols = lines[i].split(',');
+      const trimmed = lines[i].trim();
+      if (!trimmed) continue;
+      const cols = csvSplitLine(trimmed);
       if (cols.length > textIdx) {
         const t = cols[textIdx].trim();
         if (t) results.push(t);

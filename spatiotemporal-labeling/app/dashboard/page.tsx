@@ -281,7 +281,7 @@ export default function DashboardPage() {
                         </div>
                         <div style={{ display: 'flex', gap: 6, marginLeft: 12 }}>
                           <button
-                            onClick={(e) => { e.stopPropagation(); router.push(`/annotate/${b.id}`); }}
+                            onClick={(e) => { e.stopPropagation(); handleExpand(b.id); }}
                             style={btnStyle('#2563eb', '#fff')}
                           >
                             Open
@@ -306,7 +306,12 @@ export default function DashboardPage() {
                             <div>
                               <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
                                 <button
-                                  onClick={() => router.push(`/annotate/${detailData.id}`)}
+                                  onClick={() => {
+                                    const first = detailData.stems?.[0];
+                                    if (first) {
+                                      router.push(`/annotate/${detailData.id}/${first.stem_id}`);
+                                    }
+                                  }}
                                   style={btnStyle('#2563eb', '#fff')}
                                 >
                                   Open Annotator
