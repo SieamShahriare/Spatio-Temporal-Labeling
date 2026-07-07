@@ -1,11 +1,14 @@
 """
 Pydantic schemas for request/response models.
 """
-
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional, List, Dict, Any
 from datetime import datetime
 
+
+# ---------------------------------------------------------------------------
+# Existing models (kept for backward compatibility)
+# ---------------------------------------------------------------------------
 
 class SessionCreate(BaseModel):
     username: str
@@ -82,3 +85,124 @@ class SessionOut(BaseModel):
     completed_at: Optional[datetime]
     created_at: datetime
     spans: List[SpanOut] = []
+
+
+# ---------------------------------------------------------------------------
+# Auth models
+# ---------------------------------------------------------------------------
+
+class SignupRequest(BaseModel):
+    email: str
+    password: str
+    username: str
+
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
+
+class UserOut(BaseModel):
+    id: int
+    email: str
+    username: str
+    created_at: datetime
+
+
+class AuthMeResponse(BaseModel):
+    user: UserOut
+    csrf_token: str
+
+
+# ---------------------------------------------------------------------------
+# Stems models
+# ---------------------------------------------------------------------------
+
+class StemOut(BaseModel):
+    id: int
+    text: str
+    word_count: int
+    state: str  # 'available' | 'booked' | 'completed'
+    booked_by: Optional[Dict[str, Any]] = None
+    locked_until: Optional[datetime] = None
+    completed_by: Optional[Dict[str, Any]] = None
+    completed_at: Optional[datetime] = None
+
+
+class StemsListResponse(BaseModel):
+    items: List[StemOut]
+    total: int
+    page: int
+    page_size: int
+
+
+# ---------------------------------------------------------------------------
+# Batch models
+# ---------------------------------------------------------------------------
+
+class BatchCreate(BaseModel):
+    name: str
+    stem_ids: List[int]
+
+
+class BatchOut(BaseModel):
+    id: int
+    name: str
+    owner_id: int
+    owner_username: str
+    created_at: datetime
+    locked_at: datetime
+    expires_at: datetime
+    rebook_count: int
+    status: str
+    remaining_seconds: int
+    progress: Dict[str, int]  # {"done": N, "total": M}
+
+
+class BatchDetailOut(BatchOut):
+    stems: List[Dict[str, Any]]
+
+
+class BatchStemOut(BaseModel):
+    id: int
+    stem_id: int
+    stem_text: str
+    word_count: int
+    status: str
+    completed_by: Optional[Dict[str, Any]] = None
+    completed_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+
+# ---------------------------------------------------------------------------
+# Batch annotation (spans/relations scoped to batch_stem)
+# ---------------------------------------------------------------------------
+
+class BatchSpanCreate(BaseModel):
+    batch_stem_id: int
+    label_type: str
+    span_text: str
+    char_start: int
+    char_end: int
+    tl_start: float = 10.0
+    tl_end: float = 30.0
+    source: str = 'manual'
+
+
+class BatchSpanOut(BaseModel):
+    id: int
+    batch_stem_id: int
+    label_type: str
+    seq_label: str
+    span_text: str
+    char_start: int
+    char_end: int
+    tl_start: float
+    tl_end: float
+    source: str
+    created_at: datetime
+
+
+class ConflictResponse(BaseModel):
+    message: str
+    conflict_stem_ids: List[int]
