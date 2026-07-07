@@ -1354,15 +1354,44 @@ async def export_batch_json(batch_id: int, request: Request):
             "SELECT * FROM matrix_snapshots WHERE session_id=$1 ORDER BY updated_at DESC LIMIT 1",
             session_id
         )
-        batch_data["stems"].append({
-            "batch_stem_id": bs["id"],
-            "stem_id": bs["stem_id"],
-            "stem_text": bs["stem_text"],
-            "spans": [{k: _serialize(v) for k, v in dict(sp).items()} for sp in spans],
-            "matrix": json.loads(snapshot["matrix_json"]) if snapshot else [],
-            "span_order": json.loads(snapshot["span_order"]) if snapshot else [],
-        })
+    batch_data["stems"].append({
+        "batch_stem_id": bs["id"],
+        "stem_id": bs["stem_id"],
+        "stem_text": bs["stem_text"],
+        "spans": [{k: _serialize(v) for k, v in dict(sp).items()} for sp in spans],
+        "matrix": json.loads(snapshot["matrix_json"]) if snapshot else [],
+        "span_order": json.loads(snapshot["span_order"]) if snapshot else [],
+    })
     return batch_data
+
+
+@app.get("/batch-stems/{batch_stem_id}/export/json")
+async def export_batch_stem_json(batch_stem_id: int, request: Request):
+    user = await get_current_user(request)
+    pool = await get_pool()
+    bs = await pool.fetchrow("SELECT * FROM batch_stems WHERE id=$1", batch_stem_id)
+    if not bs:
+        raise HTTPException(status_code=404, detail="Batch stem not found")
+    batch = await pool.fetchrow("SELECT * FROM batches WHERE id=$1 AND owner_id=$2", bs["batch_id"], user["id"])
+    if not batch:
+        raise HTTPException(status_code=404, detail="Batch not found")
+    stem_row = await pool.fetchrow("SELECT text FROM stems WHERE id=$1", bs["stem_id"])
+    stem_text = stem_row["text"] if stem_row else ""
+    spans = await pool.fetch("SELECT * FROM spans WHERE batch_stem_id=$1 ORDER BY created_at", batch_stem_id)
+    session_id = -bs["id"]
+    snapshot = await pool.fetchrow(
+        "SELECT * FROM matrix_snapshots WHERE session_id=$1 ORDER BY updated_at DESC LIMIT 1",
+        session_id
+    )
+    return {
+        "batch_stem_id": bs["id"],
+        "stem_id": bs["stem_id"],
+        "stem_text": stem_text,
+        "status": bs["status"],
+        "spans": [{k: _serialize(v) for k, v in dict(sp).items()} for sp in spans],
+        "matrix": json.loads(snapshot["matrix_json"]) if snapshot else [],
+        "span_order": json.loads(snapshot["span_order"]) if snapshot else [],
+    }
 
 
 # ---------------------------------------------------------------------------

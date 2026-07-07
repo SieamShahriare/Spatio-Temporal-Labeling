@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import { getBatch, releaseBatch, rebookBatch, exportBatchCsv, exportBatchJson } from '@/lib/api';
+import { getBatch, releaseBatch, rebookBatch, exportBatchCsv, exportBatchJson, exportBatchStemJson } from '@/lib/api';
 import { BatchDetailOut } from '@/lib/types';
 import { useAuth } from '@/lib/AuthContext';
 
@@ -300,6 +300,14 @@ export default function BatchDetailPage() {
                   >
                     {bs.status === 'done' ? 'Review' : bs.status === 'in_progress' ? 'Continue' : 'Start'}
                   </button>
+                  <a
+                    href={exportBatchStemJson(bs.id)}
+                    download
+                    title="Download stem JSON"
+                    style={{ ...btnStyle('var(--surface-alt)', 'var(--text-primary)'), textDecoration: 'none', marginLeft: 6, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', lineHeight: 1 }}
+                  >
+                    ⬇
+                  </a>
                 </td>
               </tr>
             ))}

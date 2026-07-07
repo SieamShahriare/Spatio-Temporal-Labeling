@@ -136,6 +136,8 @@ export const releaseBatch = (id: number) =>
 
 export const exportBatchCsv = (id: number) => `${BASE}/batches/${id}/export/csv`;
 export const exportBatchJson = (id: number) => `${BASE}/batches/${id}/export/json`;
+export const exportBatchStemJson = (batchStemId: number) =>
+  `${BASE}/batch-stems/${batchStemId}/export/json`;
 
 // ====== Batch-stem annotations ======
 

@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { listBatches, getBatch, releaseBatch, rebookBatch, exportBatchCsv, exportBatchJson } from '@/lib/api';
+import { listBatches, getBatch, releaseBatch, rebookBatch, exportBatchCsv, exportBatchJson, exportBatchStemJson } from '@/lib/api';
 import { BatchOut, BatchDetailOut } from '@/lib/types';
 import { useAuth } from '@/lib/AuthContext';
 
@@ -309,7 +309,7 @@ export default function DashboardPage() {
                                   onClick={() => {
                                     const first = detailData.stems?.[0];
                                     if (first) {
-                                      router.push(`/annotate/${detailData.id}/${first.id}`);
+                                      router.push(`/batches/${detailData.id}`);
                                     }
                                   }}
                                   style={btnStyle('#2563eb', '#fff')}
@@ -382,6 +382,14 @@ export default function DashboardPage() {
                                     >
                                       {bs.status === 'done' ? 'Review' : bs.status === 'in_progress' ? 'Continue' : 'Start'}
                                     </button>
+                                    <a
+                                      href={exportBatchStemJson(bs.id)}
+                                      download
+                                      title="Download stem JSON"
+                                      style={{ ...btnStyle('var(--surface-alt)', 'var(--text-primary)'), textDecoration: 'none', marginLeft: 6, fontSize: 11, padding: '2px 8px', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', lineHeight: 1 }}
+                                    >
+                                      ⬇
+                                    </a>
                                   </div>
                                 ))}
                               </div>
