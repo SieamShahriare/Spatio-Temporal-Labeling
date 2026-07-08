@@ -22,6 +22,14 @@ const COLORS = {
   Time:  { bg: '#f97316', border: '#c2410c', text: '#fff' },
 };
 
+const getSpanMetrics = (span: Span, trackWidthPx: number, pxPerUnit: number) => {
+  const leftPx = (span.tl_start / (TIMELINE_MAX - TIMELINE_MIN)) * trackWidthPx;
+  const rawWidthPx = ((span.tl_end - span.tl_start) / (TIMELINE_MAX - TIMELINE_MIN)) * trackWidthPx;
+  const widthPx = Math.max(MIN_WIDTH * pxPerUnit, rawWidthPx) - 16;
+  const finalWidth = Math.max(5, widthPx);
+  return { leftPx, finalWidth };
+};
+
 export default function Timeline({ spans, onUpdateSpan, onExtractTimeline, extractingTimeline = false }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [trackWidthPx, setTrackWidthPx] = useState<number>(760);
@@ -32,6 +40,7 @@ export default function Timeline({ spans, onUpdateSpan, onExtractTimeline, extra
     origStart: number;
     origEnd: number;
   } | null>(null);
+  const [hoveredSpanId, setHoveredSpanId] = useState<number | null>(null);
   const [localSpans, setLocalSpans] = useState<Span[]>(spans);
 
   useEffect(() => { setLocalSpans(spans); }, [spans]);
@@ -158,6 +167,22 @@ export default function Timeline({ spans, onUpdateSpan, onExtractTimeline, extra
         </div>
 
         <div style={{ position: 'relative', height: totalHeight }}>
+          <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: 0 }}>
+            {ticks.map(t => (
+              <div
+                key={`grid-${t}`}
+                style={{
+                  position: 'absolute',
+                  left: LABEL_WIDTH + (t / (TIMELINE_MAX - TIMELINE_MIN)) * trackWidthPx,
+                  top: 0,
+                  bottom: 0,
+                  width: 1,
+                  background: [0, 50, 100].includes(t) ? 'rgba(255,255,255,0.15)' : 'rgba(255,255,255,0.06)',
+                }}
+              />
+            ))}
+          </div>
+
           {localSpans.map((span, idx) => {
             const colors = COLORS[span.label_type as keyof typeof COLORS] ?? COLORS.Event;
             const top = idx * (TRACK_HEIGHT + TRACK_GAP);
@@ -189,6 +214,8 @@ export default function Timeline({ spans, onUpdateSpan, onExtractTimeline, extra
 
                   <div
                     onMouseDown={e => onMouseDown(e, span.id, 'move')}
+                    onMouseEnter={() => setHoveredSpanId(span.id)}
+                    onMouseLeave={() => setHoveredSpanId(null)}
                     title={`${span.seq_label}: ${span.span_text} [${span.tl_start}–${span.tl_end}]`}
                     style={{
                       position: 'absolute',
@@ -238,6 +265,25 @@ export default function Timeline({ spans, onUpdateSpan, onExtractTimeline, extra
               </div>
             );
           })}
+          <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: 2 }}>
+            {(() => {
+              const activeId = dragging?.spanId ?? hoveredSpanId;
+              if (activeId === null) return null;
+              const activeSpan = localSpans.find(s => s.id === activeId);
+              if (!activeSpan) return null;
+              const { leftPx, finalWidth } = getSpanMetrics(activeSpan, trackWidthPx, pxPerUnit);
+              return [
+                { x: leftPx, val: activeSpan.tl_start },
+                { x: leftPx + finalWidth, val: activeSpan.tl_end },
+              ].map((item, i) => (
+                <div key={i} style={{ position: 'absolute', left: LABEL_WIDTH + item.x, top: 0, bottom: 0, width: 2, background: '#f59e0b', boxShadow: '0 0 8px rgba(245,158,11,0.35)' }}>
+                  <div style={{ position: 'absolute', left: 6, top: -18, fontSize: 11, fontWeight: 600, color: '#f59e0b', whiteSpace: 'nowrap' }}>
+                    {Math.round(item.val * 10) / 10}
+                  </div>
+                </div>
+              ));
+            })()}
+          </div>
         </div>
       </div>
 
