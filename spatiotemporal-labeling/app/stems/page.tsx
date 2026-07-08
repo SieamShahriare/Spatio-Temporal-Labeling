@@ -300,8 +300,8 @@ export default function StemsPage() {
             ← Dashboard
           </button>
           <h1 style={{ fontSize: 18, fontWeight: 700, margin: 0 }}>Stems Browser</h1>
-          <p style={{ fontSize: 13, color: 'var(--text-muted)', margin: '2px 0 0' }}>
-            {total} stems · {status === 'available' ? 'select rows to book' : 'read-only catalog'}
+           <p style={{ fontSize: 13, color: 'var(--text-muted)', margin: '2px 0 0' }}>
+             {total} stems · select available stems to book, or switch to Available filter to book
           </p>
         </div>
         <button
@@ -423,44 +423,42 @@ export default function StemsPage() {
         borderRadius: 10,
         overflow: 'hidden',
       }}>
-        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-          <thead>
-            <tr style={{ background: 'var(--surface-alt)' }}>
-              {status === 'available' && <th style={th}>Select</th>}
-              <th style={th}>ID</th>
-              <th style={{ ...th, flex: 1 }}>Preview</th>
-              <th style={th}>Len</th>
-              <th style={th}>Status</th>
-            </tr>
-          </thead>
-          <tbody>
-            {loading ? (
-              <tr><td colSpan={status === 'available' ? 5 : 4} style={{ padding: 24, textAlign: 'center', color: 'var(--text-muted)' }}>Loading…</td></tr>
-            ) : items.length === 0 ? (
-              <tr><td colSpan={status === 'available' ? 5 : 4} style={{ padding: 24, textAlign: 'center', color: 'var(--text-muted)' }}>No stems found.</td></tr>
-            ) : (
-              items.map(s => {
-                const isAvailable = s.state === 'available';
-                const isConflict = conflicts.has(s.id);
-                return (
-                  <tr
-                    key={s.id}
-                    style={{
-                      borderBottom: '1px solid var(--border)',
-                      background: isConflict ? 'var(--error-bg)' : undefined,
-                    }}
-                  >
-                    {status === 'available' && (
-                      <td style={td}>
-                        <input
-                          type="checkbox"
-                          checked={selected.has(s.id)}
-                          disabled={!isAvailable}
-                          onChange={() => toggleSelect(s.id, isAvailable)}
-                        />
-                      </td>
-                    )}
-                    <td style={td}>{s.id}</td>
+         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+           <thead>
+             <tr style={{ background: 'var(--surface-alt)' }}>
+               <th style={th}>Select</th>
+               <th style={th}>ID</th>
+               <th style={{ ...th, flex: 1 }}>Preview</th>
+               <th style={th}>Len</th>
+               <th style={th}>Status</th>
+             </tr>
+           </thead>
+           <tbody>
+             {loading ? (
+               <tr><td colSpan={5} style={{ padding: 24, textAlign: 'center', color: 'var(--text-muted)' }}>Loading…</td></tr>
+             ) : items.length === 0 ? (
+               <tr><td colSpan={5} style={{ padding: 24, textAlign: 'center', color: 'var(--text-muted)' }}>No stems found.</td></tr>
+             ) : (
+               items.map(s => {
+                 const isAvailable = s.state === 'available';
+                 const isConflict = conflicts.has(s.id);
+                 return (
+                   <tr
+                     key={s.id}
+                     style={{
+                       borderBottom: '1px solid var(--border)',
+                       background: isConflict ? 'var(--error-bg)' : undefined,
+                     }}
+                   >
+                     <td style={{ ...td, padding: '6px 10px' }}>
+                       <input
+                         type="checkbox"
+                         checked={selected.has(s.id)}
+                         disabled={!isAvailable}
+                         onChange={() => toggleSelect(s.id, isAvailable)}
+                       />
+                     </td>
+                     <td style={td}>{s.id}</td>
                     <td style={{ ...td, maxWidth: 400, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                       {s.text.slice(0, 120)}{s.text.length > 120 ? '…' : ''}
                     </td>

@@ -1,5 +1,7 @@
 // API helper — all calls go to NEXT_PUBLIC_API_URL (FastAPI backend)
 
+import type { LLMLabelAndTimelineResponse } from '@/lib/types';
+
 const BASE = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000';
 
 let _csrfToken: string | null = null;
@@ -220,6 +222,14 @@ export interface ExtractEventsResponse {
 
 export const extractTimeline = (sessionId: number) =>
   apiFetch('/api/extract-timeline', { method: 'POST', body: JSON.stringify({ session_id: sessionId }) });
+
+export const llmLabelAndTimeline = async (batchStemId: number, text: string): Promise<LLMLabelAndTimelineResponse> => {
+  const res = await apiFetch('/api/llm-label-and-timeline', {
+    method: 'POST',
+    body: JSON.stringify({ batch_stem_id: batchStemId, text }),
+  });
+  return res as LLMLabelAndTimelineResponse;
+};
 
 export const updateSpan = (spanId: number, tl_start: number, tl_end: number) =>
   apiFetch(`/spans/${spanId}`, { method: 'PATCH', body: JSON.stringify({ tl_start, tl_end }) });

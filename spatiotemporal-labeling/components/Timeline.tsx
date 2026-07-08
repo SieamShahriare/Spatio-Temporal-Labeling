@@ -133,7 +133,7 @@ export default function Timeline({ spans, onUpdateSpan, onExtractTimeline, extra
               fontSize: 12,
             }}
           >
-            {extractingTimeline ? 'Setting positions…' : 'Use LLM'}
+            {extractingTimeline ? 'Setting positions…' : 'Detect Timeline only'}
           </button>
         )}
       </div>

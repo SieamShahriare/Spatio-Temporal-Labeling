@@ -18,8 +18,9 @@ import {
   markBatchStemDone,
   extractEvents,
   extractTimeline,
+  llmLabelAndTimeline,
 } from '@/lib/api';
-import { BatchStemDetail, BatchSpanOut, MatrixData, ExtractEventsResponse, ExtractTimelineResponse } from '@/lib/types';
+import { BatchStemDetail, BatchSpanOut, MatrixData, ExtractEventsResponse, ExtractTimelineResponse, LLMLabelAndTimelineResponse } from '@/lib/types';
 import { useAuth } from '@/lib/AuthContext';
 
 export default function AnnotateBatchStemPage() {
@@ -37,6 +38,7 @@ export default function AnnotateBatchStemPage() {
   const [saving, setSaving] = useState(false);
   const [extracting, setExtracting] = useState(false);
   const [extractingTimeline, setExtractingTimeline] = useState(false);
+  const [extractingBoth, setExtractingBoth] = useState(false);
   const [skippedCount, setSkippedCount] = useState(0);
   const [timelineSkippedCount, setTimelineSkippedCount] = useState(0);
   const [error, setError] = useState('');
@@ -179,6 +181,25 @@ export default function AnnotateBatchStemPage() {
     }
   }, [stemId]);
 
+  const handleLLMLabelAndTimeline = useCallback(async () => {
+    setExtractingBoth(true);
+    setSkippedCount(0);
+    setTimelineSkippedCount(0);
+    setError('');
+    try {
+      const result: LLMLabelAndTimelineResponse = await llmLabelAndTimeline(stemId, stem!.stem_text);
+      setSkippedCount(result.skipped_events.length);
+      setTimelineSkippedCount(result.timeline_skipped?.length || 0);
+      const updatedSpans = await listBatchSpans(stemId);
+      setSpans(updatedSpans);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : 'LLM labeling failed.';
+      setError(msg);
+    } finally {
+      setExtractingBoth(false);
+    }
+  }, [stemId, stem]);
+
   const handleUpdateSpan = useCallback((spanId: number, tlStart: number, tlEnd: number) => {
     setSpans(prev => prev.map(s => s.id === spanId ? { ...s, tl_start: tlStart, tl_end: tlEnd } : s));
     if (debounceRef.current) clearTimeout(debounceRef.current);
@@ -260,21 +281,39 @@ export default function AnnotateBatchStemPage() {
               Status: <strong>{stem.status.replace('_', ' ')}</strong>
             </p>
           </div>
-          <button
-            onClick={handleMarkDone}
-            style={{
-              padding: '8px 16px',
-              background: '#15803d',
-              color: '#fff',
-              border: 'none',
-              borderRadius: 6,
-              cursor: 'pointer',
-              fontWeight: 600,
-              fontSize: 13,
-            }}
-          >
-            ✓ Mark Done &amp; Return
-          </button>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'flex-end' }}>
+            <button
+              onClick={handleMarkDone}
+              style={{
+                padding: '8px 16px',
+                background: '#15803d',
+                color: '#fff',
+                border: 'none',
+                borderRadius: 6,
+                cursor: 'pointer',
+                fontWeight: 600,
+                fontSize: 13,
+              }}
+            >
+              ✓ Mark Done &amp; Return
+            </button>
+            <button
+              onClick={handleLLMLabelAndTimeline}
+              disabled={extractingBoth}
+              style={{
+                padding: '8px 16px',
+                background: extractingBoth ? 'var(--text-disabled)' : '#2563eb',
+                color: '#fff',
+                border: 'none',
+                borderRadius: 6,
+                cursor: extractingBoth ? 'not-allowed' : 'pointer',
+                fontWeight: 600,
+                fontSize: 13,
+              }}
+            >
+              {extractingBoth ? 'Processing…' : 'Use LLM to label events and detect timeline (recommended)'}
+            </button>
+          </div>
         </div>
 
         {error && (

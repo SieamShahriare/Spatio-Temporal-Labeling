@@ -206,3 +206,10 @@ export interface ExtractTimelineResponse {
   skipped: Array<{ text: string; reason: string }>;
 }
 
+export interface LLMLabelAndTimelineResponse {
+  events: Array<{ span_text: string; char_start: number; char_end: number; label_type: string; source: string }>;
+  skipped_events: Array<{ text: string; reason: string }>;
+  timeline_updated: Array<{ span_id: number; seq_label: string; span_text: string; tl_start: number; tl_end: number }>;
+  timeline_skipped: Array<{ text: string; reason: string }>;
+}
+
