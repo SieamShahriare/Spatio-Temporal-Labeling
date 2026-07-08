@@ -2,10 +2,10 @@
 LLM provider adapter — provider-agnostic via environment variables.
 
 Supported env vars (all required unless noted):
-  LLM_PROVIDER    anthropic | openai | gemini | openai-compatible
+  LLM_PROVIDER    anthropic | openai | gemini | openai-compatible | openrouter
   LLM_MODEL       e.g. claude-sonnet-4-5, gpt-4.1, gemini-2.5-pro
   LLM_API_KEY
-  LLM_BASE_URL    optional; used by openai/openai-compatible providers
+  LLM_BASE_URL    optional; used by openai/openai-compatible providers. openrouter ignores this and always uses https://openrouter.ai/api/v1
 """
 
 import os
@@ -78,12 +78,12 @@ async def _call_provider(provider: str, system: str, user: str) -> str:
     async with httpx.AsyncClient(timeout=timeout) as client:
         if provider == "anthropic":
             return await _call_anthropic(client, system, user)
-        elif provider in ("openai", "openai-compatible"):
-            return await _call_openai_compatible(client, system, user)
+        elif provider in ("openai", "openai-compatible", "openrouter"):
+            return await _call_openai_compatible(client, provider, system, user)
         elif provider == "gemini":
             return await _call_gemini(client, system, user)
         else:
-            raise ValueError(f"Unsupported LLM_PROVIDER: '{provider}'. Use anthropic | openai | gemini | openai-compatible")
+            raise ValueError(f"Unsupported LLM_PROVIDER: '{provider}'. Use anthropic | openai | gemini | openai-compatible | openrouter")
 
 
 async def _call_anthropic(client: httpx.AsyncClient, system: str, user: str) -> str:
@@ -108,28 +108,39 @@ async def _call_anthropic(client: httpx.AsyncClient, system: str, user: str) -> 
     return "".join(p.get("text", "") for p in parts if isinstance(p, dict) and p.get("type") == "text")
 
 
-async def _call_openai_compatible(client: httpx.AsyncClient, system: str, user: str) -> str:
-    base_url = LLM_BASE_URL or "https://api.openai.com/v1"
+async def _call_openai_compatible(client: httpx.AsyncClient, provider: str, system: str, user: str) -> str:
+    if provider == "openrouter":
+        base_url = "https://openrouter.ai/api/v1"
+    else:
+        base_url = LLM_BASE_URL or "https://api.openai.com/v1"
     base_url = base_url.rstrip("/")
+    payload = {
+        "model": LLM_MODEL,
+        "temperature": 0,
+        "messages": [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ],
+    }
+    if provider != "openrouter":
+        payload["response_format"] = {"type": "json_object"}
     resp = await client.post(
         f"{base_url}/chat/completions",
         headers={
             "Authorization": f"Bearer {LLM_API_KEY}",
             "Content-Type": "application/json",
         },
-        json={
-            "model": LLM_MODEL,
-            "temperature": 0,
-            "response_format": {"type": "json_object"},
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
-        },
+        json=payload,
     )
-    resp.raise_for_status()
+    if resp.status_code != 200:
+        raise ValueError(f"HTTP {resp.status_code}: {resp.text[:500]}")
     data = resp.json()
-    return data["choices"][0]["message"]["content"]
+    if "error" in data:
+        raise ValueError(f"Provider error: {data['error']}")
+    choices = data.get("choices")
+    if not choices or not isinstance(choices, list) or not choices[0].get("message", {}).get("content"):
+        raise ValueError(f"Unexpected response shape: {data}")
+    return choices[0]["message"]["content"]
 
 
 async def _call_gemini(client: httpx.AsyncClient, system: str, user: str) -> str:
