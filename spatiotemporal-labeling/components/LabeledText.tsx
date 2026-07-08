@@ -1,7 +1,7 @@
 'use client';
 
 import { Span } from '@/lib/types';
-import { lightColorForSpan } from '@/lib/spanColors';
+import { colorForSpan } from '@/lib/spanColors';
 
 interface Segment {
   text: string;
@@ -53,7 +53,7 @@ export default function LabeledText({ stemText, spans, onDeleteSpan, interactive
           return <span key={`${seg.start}-${seg.end}`}>{seg.text}</span>;
         }
         const s = seg.spans[0];
-        const colors = lightColorForSpan(s);
+        const colors = colorForSpan(s);
         const segKey = `${seg.start}-${seg.end}`;
 
         return (

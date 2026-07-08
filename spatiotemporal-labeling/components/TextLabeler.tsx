@@ -3,7 +3,7 @@
 import { useState, useCallback } from 'react';
 import { Span } from '@/lib/types';
 import { getSegments } from './LabeledText';
-import { colorForType, lightColorForSpan } from '@/lib/spanColors';
+import { colorForSpan, colorForType } from '@/lib/spanColors';
 
 interface Props {
   stemText: string;
@@ -135,7 +135,7 @@ export default function TextLabeler({ stemText, spans, onAddSpan, onDeleteSpan, 
             return <span key={`${seg.start}-${seg.end}`}>{seg.text}</span>;
           }
           const s = seg.spans[0];
-          const colors = lightColorForSpan(s);
+          const colors = colorForSpan(s);
           const segKey = `${seg.start}-${seg.end}`;
           const isHovered = hoveredSegment === segKey;
           const actions = getHoverActions(seg);
@@ -285,7 +285,7 @@ export default function TextLabeler({ stemText, spans, onAddSpan, onDeleteSpan, 
           </div>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
             {spans.map(s => {
-              const colors = lightColorForSpan(s);
+              const colors = colorForSpan(s);
               return (
                 <div
                   key={s.id}
