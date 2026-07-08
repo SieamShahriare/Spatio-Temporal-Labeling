@@ -19,6 +19,7 @@ from models import (
     SpanCreate, SpanUpdate, MatrixOverride,
     ExtractEventsRequest, ExtractEventsResponse,
     ExtractTimelineRequest, ExtractTimelineResponse,
+    LLMLabelAndTimelineRequest, LLMLabelAndTimelineResponse,
     SignupRequest, LoginRequest, UserOut, AuthMeResponse,
     StemOut, StemsListResponse, StemsImportResponse,
     BatchCreate, BatchOut, BatchDetailOut,
@@ -1632,3 +1633,175 @@ async def extract_timeline(body: ExtractTimelineRequest):
         })
 
     return ExtractTimelineResponse(updated=updated, skipped=skipped).model_dump()
+
+
+@app.post("/api/llm-label-and-timeline")
+async def llm_label_and_timeline(body: LLMLabelAndTimelineRequest):
+    pool = await get_pool()
+    batch_stem_id = body.batch_stem_id
+    text = (body.text or "").strip()
+    if not text:
+        return LLMLabelAndTimelineResponse(events=[], skipped_events=[], timeline_updated=[], timeline_skipped=[]).model_dump()
+
+    bs = await pool.fetchrow(
+        "SELECT bs.*, s.text AS stem_text FROM batch_stems bs JOIN stems s ON s.id = bs.stem_id WHERE bs.id=$1",
+        batch_stem_id
+    )
+    if not bs:
+        raise HTTPException(status_code=404, detail="Batch stem not found")
+    stem_text = bs["stem_text"]
+
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            user_msg = f"{text}\n\nReturn JSON matching this schema:\n{SCHEMA_JSON}"
+            try:
+                raw = await callLLM(SYSTEM_PROMPT, user_msg)
+            except ValueError as exc:
+                raise HTTPException(status_code=502, detail=str(exc)) from exc
+            except Exception as exc:
+                raise HTTPException(status_code=502, detail=f"LLM provider error: {exc}") from exc
+
+            if not isinstance(raw, dict):
+                raise HTTPException(status_code=502, detail="LLM returned an unexpected response shape.")
+            raw_events = raw.get("events", [])
+            if not isinstance(raw_events, list):
+                raise HTTPException(status_code=502, detail="LLM returned an unexpected events list.")
+
+            typed: list[dict] = []
+            skipped_events: list[dict] = []
+            for ev in raw_events:
+                if not isinstance(ev, dict):
+                    continue
+                evt_text = ev.get("text", "")
+                chars = _find_raw_event_chars(text, ev)
+                if chars is None:
+                    skipped_events.append({
+                        "text": evt_text,
+                        "reason": "Could not locate text in source even after whitespace normalization."
+                    })
+                    continue
+                typed.append({
+                    "text": evt_text,
+                    "char_start": chars["char_start"],
+                    "char_end": chars["char_end"],
+                })
+
+            accepted_events: list[dict] = []
+            for t in typed:
+                overlap = any(
+                    _overlaps(t["char_start"], t["char_end"], a["char_start"], a["char_end"])
+                    for a in accepted_events
+                )
+                if overlap:
+                    skipped_events.append({"text": t["text"], "reason": "Overlaps with another extracted event in this batch."})
+                else:
+                    accepted_events.append({
+                        "label_type": "Event",
+                        "span_text": t["text"],
+                        "char_start": t["char_start"],
+                        "char_end": t["char_end"],
+                        "source": "llm",
+                    })
+
+            existing = await conn.fetch(
+                "SELECT * FROM spans WHERE batch_stem_id = $1 ORDER BY created_at", batch_stem_id
+            )
+            event_count = sum(1 for s in existing if s["label_type"] == "Event")
+            created_spans = []
+            for event in accepted_events:
+                event_count += 1
+                seq_label = f"E{event_count}"
+                row = await conn.fetchrow(
+                    """INSERT INTO spans (session_id, batch_stem_id, label_type, seq_label, span_text, char_start, char_end, tl_start, tl_end, source)
+                       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *""",
+                    -batch_stem_id, batch_stem_id, "Event", seq_label,
+                    event["span_text"], event["char_start"], event["char_end"],
+                    10.0, 30.0, "llm"
+                )
+                created_spans.append(dict(row))
+
+            all_event_rows = await conn.fetch(
+                "SELECT * FROM spans WHERE batch_stem_id = $1 AND label_type = 'Event' ORDER BY created_at",
+                batch_stem_id
+            )
+            if not all_event_rows:
+                return LLMLabelAndTimelineResponse(
+                    events=accepted_events,
+                    skipped_events=skipped_events,
+                    timeline_updated=[],
+                    timeline_skipped=[]
+                ).model_dump()
+
+            events_payload = [
+                {"text": r["span_text"], "occurrence": 1, "char_start": r["char_start"], "char_end": r["char_end"]}
+                for r in all_event_rows
+            ]
+            events_for_prompt = [{"text": r["span_text"], "occurrence": 1} for r in all_event_rows]
+
+            user_msg = (
+                f"Stem text:\n{stem_text}\n\n"
+                f"Events (in order):\n{json.dumps(events_for_prompt, indent=2)}\n\n"
+                f"Return JSON matching this schema:\n{TIMELINE_SCHEMA_JSON}"
+            )
+
+            try:
+                raw = await callLLM(TIMELINE_SYSTEM_PROMPT, user_msg)
+            except ValueError as exc:
+                raise HTTPException(status_code=502, detail=str(exc)) from exc
+            except Exception as exc:
+                raise HTTPException(status_code=502, detail=f"LLM provider error: {exc}") from exc
+
+            if not isinstance(raw, dict):
+                raise HTTPException(status_code=502, detail="LLM returned an unexpected response shape.")
+            positions = raw.get("positions", [])
+            if not isinstance(positions, list):
+                raise HTTPException(status_code=502, detail="LLM returned an unexpected positions list.")
+
+            pos_by_text: dict[str, dict] = {}
+            for p in positions:
+                if not isinstance(p, dict):
+                    continue
+                txt = p.get("text", "")
+                if txt:
+                    pos_by_text[txt] = p
+
+            timeline_updated = []
+            timeline_skipped = []
+
+            for r in all_event_rows:
+                span_id = r["id"]
+                pos = pos_by_text.get(r["span_text"])
+                if pos is None:
+                    timeline_skipped.append({"text": r["span_text"], "reason": "Not found in LLM response."})
+                    continue
+                start = pos.get("start")
+                end = pos.get("end")
+                if not isinstance(start, (int, float)) or not isinstance(end, (int, float)):
+                    timeline_skipped.append({"text": r["span_text"], "reason": "Missing start or end value from model."})
+                    continue
+                start = round(max(TIMELINE_MIN, min(TIMELINE_MAX, start)), 1)
+                end = round(max(TIMELINE_MIN, min(TIMELINE_MAX, end)), 1)
+                if end < start:
+                    avg = (start + end) / 2
+                    start = round(avg - MIN_WIDTH / 2, 1)
+                    end = round(avg + MIN_WIDTH / 2, 1)
+                elif end == start:
+                    end = round(start + MIN_WIDTH, 1)
+                await conn.execute(
+                    "UPDATE spans SET tl_start=$1, tl_end=$2, source='llm' WHERE id=$3",
+                    start, end, span_id
+                )
+                timeline_updated.append({
+                    "span_id": span_id,
+                    "seq_label": r["seq_label"],
+                    "span_text": r["span_text"],
+                    "tl_start": start,
+                    "tl_end": end,
+                })
+
+            return LLMLabelAndTimelineResponse(
+                events=accepted_events,
+                skipped_events=skipped_events,
+                timeline_updated=timeline_updated,
+                timeline_skipped=timeline_skipped
+            ).model_dump()

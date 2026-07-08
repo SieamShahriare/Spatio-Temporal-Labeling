@@ -63,6 +63,18 @@ class ExtractTimelineResponse(BaseModel):
     skipped: List[Dict[str, Any]]
 
 
+class LLMLabelAndTimelineRequest(BaseModel):
+    batch_stem_id: int
+    text: str
+
+
+class LLMLabelAndTimelineResponse(BaseModel):
+    events: List[Dict[str, Any]]
+    skipped_events: List[Dict[str, Any]]
+    timeline_updated: List[Dict[str, Any]]
+    timeline_skipped: List[Dict[str, Any]]
+
+
 class SpanOut(BaseModel):
     id: int
     session_id: int
