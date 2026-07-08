@@ -1,6 +1,7 @@
 'use client';
 
 import { Span } from '@/lib/types';
+import { lightColorForSpan } from '@/lib/spanColors';
 
 interface Segment {
   text: string;
@@ -25,11 +26,6 @@ export function getSegments(text: string, spans: Span[]): Segment[] {
     return { text: text.slice(start, end), start, end, spans: covering };
   });
 }
-
-export const LABEL_COLORS: Record<string, { bg: string; border: string; text: string }> = {
-  Event: { bg: '#dbeafe', border: '#3b82f6', text: '#1d4ed8' },
-  Time:  { bg: '#fed7aa', border: '#f97316', text: '#c2410c' },
-};
 
 interface Props {
   stemText: string;
@@ -57,7 +53,7 @@ export default function LabeledText({ stemText, spans, onDeleteSpan, interactive
           return <span key={`${seg.start}-${seg.end}`}>{seg.text}</span>;
         }
         const s = seg.spans[0];
-        const colors = LABEL_COLORS[s.label_type] ?? LABEL_COLORS.Event;
+        const colors = lightColorForSpan(s);
         const segKey = `${seg.start}-${seg.end}`;
 
         return (

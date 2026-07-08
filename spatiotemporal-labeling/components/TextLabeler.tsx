@@ -2,7 +2,8 @@
 
 import { useState, useCallback } from 'react';
 import { Span } from '@/lib/types';
-import { getSegments, LABEL_COLORS } from './LabeledText';
+import { getSegments } from './LabeledText';
+import { colorForType, lightColorForSpan } from '@/lib/spanColors';
 
 interface Props {
   stemText: string;
@@ -73,9 +74,9 @@ export default function TextLabeler({ stemText, spans, onAddSpan, onDeleteSpan, 
             style={{
               padding: '4px 14px',
               borderRadius: 6,
-              border: `2px solid ${pendingType === type ? LABEL_COLORS[type].border : 'var(--border-input)'}`,
-              background: pendingType === type ? LABEL_COLORS[type].bg : 'var(--surface)',
-              color: pendingType === type ? LABEL_COLORS[type].text : 'var(--text-primary)',
+              border: `2px solid ${pendingType === type ? colorForType(type).border : 'var(--border-input)'}`,
+              background: pendingType === type ? colorForType(type).bg : 'var(--surface)',
+              color: pendingType === type ? colorForType(type).text : 'var(--text-primary)',
               fontWeight: pendingType === type ? 600 : 400,
               cursor: 'pointer',
               fontSize: 13,
@@ -134,7 +135,7 @@ export default function TextLabeler({ stemText, spans, onAddSpan, onDeleteSpan, 
             return <span key={`${seg.start}-${seg.end}`}>{seg.text}</span>;
           }
           const s = seg.spans[0];
-          const colors = LABEL_COLORS[s.label_type];
+          const colors = lightColorForSpan(s);
           const segKey = `${seg.start}-${seg.end}`;
           const isHovered = hoveredSegment === segKey;
           const actions = getHoverActions(seg);
@@ -284,7 +285,7 @@ export default function TextLabeler({ stemText, spans, onAddSpan, onDeleteSpan, 
           </div>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
             {spans.map(s => {
-              const colors = LABEL_COLORS[s.label_type];
+              const colors = lightColorForSpan(s);
               return (
                 <div
                   key={s.id}

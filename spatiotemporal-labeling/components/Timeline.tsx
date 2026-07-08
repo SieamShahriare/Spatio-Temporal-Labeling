@@ -2,33 +2,13 @@
 
 import { useRef, useState, useCallback, useEffect, useMemo } from 'react';
 import { Span } from '@/lib/types';
+import { colorForSpan } from '@/lib/spanColors';
 
 interface Props {
   spans: Span[];
   onUpdateSpan: (spanId: number, tlStart: number, tlEnd: number) => void;
   onExtractTimeline?: () => Promise<void>;
   extractingTimeline?: boolean;
-}
-
-const HUE_STEP = 360 / 12;
-const SATURATION = 65;
-const LIGHTNESS = 48;
-
-function hashString(str: string): number {
-  let hash = 0;
-  for (let i = 0; i < str.length; i++) {
-    hash = str.charCodeAt(i) + ((hash << 5) - hash);
-  }
-  return Math.abs(hash);
-}
-
-function colorForSpan(span: Span): { bg: string; border: string; text: string } {
-  const base = `${span.label_type ?? 'span'}::${span.seq_label}::${span.span_text}`;
-  const h = (hashString(base) * HUE_STEP) % 360;
-  const bg = `hsl(${h}, ${SATURATION}%, ${LIGHTNESS}%)`;
-  const border = `hsl(${h}, ${SATURATION}%, ${Math.max(LIGHTNESS - 16, 20)}%)`;
-  const text = '#fff';
-  return { bg, border, text };
 }
 
 const TRACK_HEIGHT = 40;
