@@ -10,17 +10,33 @@ interface Props {
   extractingTimeline?: boolean;
 }
 
+const HUE_STEP = 360 / 12;
+const SATURATION = 65;
+const LIGHTNESS = 48;
+
+function hashString(str: string): number {
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) {
+    hash = str.charCodeAt(i) + ((hash << 5) - hash);
+  }
+  return Math.abs(hash);
+}
+
+function colorForSpan(span: Span): { bg: string; border: string; text: string } {
+  const base = `${span.label_type ?? 'span'}::${span.seq_label}::${span.span_text}`;
+  const h = (hashString(base) * HUE_STEP) % 360;
+  const bg = `hsl(${h}, ${SATURATION}%, ${LIGHTNESS}%)`;
+  const border = `hsl(${h}, ${SATURATION}%, ${Math.max(LIGHTNESS - 16, 20)}%)`;
+  const text = '#fff';
+  return { bg, border, text };
+}
+
 const TRACK_HEIGHT = 40;
 const TRACK_GAP = 8;
 const LABEL_WIDTH = 220;
 const MIN_WIDTH = 5;
 const TIMELINE_MIN = 0;
 const TIMELINE_MAX = 100;
-
-const COLORS = {
-  Event: { bg: '#3b82f6', border: '#1d4ed8', text: '#fff' },
-  Time:  { bg: '#f97316', border: '#c2410c', text: '#fff' },
-};
 
 const getSpanMetrics = (span: Span, trackWidthPx: number, pxPerUnit: number) => {
   const leftPx = (span.tl_start / (TIMELINE_MAX - TIMELINE_MIN)) * trackWidthPx;
@@ -184,7 +200,7 @@ export default function Timeline({ spans, onUpdateSpan, onExtractTimeline, extra
           </div>
 
           {localSpans.map((span, idx) => {
-            const colors = COLORS[span.label_type as keyof typeof COLORS] ?? COLORS.Event;
+            const colors = colorForSpan(span);
             const top = idx * (TRACK_HEIGHT + TRACK_GAP);
             const leftPx = (span.tl_start / (TIMELINE_MAX - TIMELINE_MIN)) * trackWidthPx;
             const widthPx = Math.max(MIN_WIDTH * pxPerUnit, ((span.tl_end - span.tl_start) / (TIMELINE_MAX - TIMELINE_MIN)) * trackWidthPx) - 16;
@@ -294,7 +310,7 @@ export default function Timeline({ spans, onUpdateSpan, onExtractTimeline, extra
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
           {localSpans.map(span => (
             <div key={span.id} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13 }}>
-              <span style={{ width: 168, fontWeight: 700, color: COLORS[span.label_type as keyof typeof COLORS]?.bg ?? 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              <span style={{ width: 168, fontWeight: 700, color: colorForSpan(span).bg, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                 {span.seq_label} {span.span_text}
               </span>
               <label style={{ color: 'var(--text-muted)' }}>Start:</label>
