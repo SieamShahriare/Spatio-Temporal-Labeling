@@ -5,6 +5,7 @@ FastAPI backend for Spatiotemporal Annotation & Allen's Algebra Benchmarking Sys
 import json
 import csv
 import io
+import os
 from typing import Optional
 from datetime import datetime, timezone, timedelta
 from contextlib import asynccontextmanager
@@ -112,13 +113,21 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Spatiotemporal Annotator API", version="1.0.0", lifespan=lifespan)
 
+# Comma-separated list, e.g. "http://localhost:3000,https://my-app.vercel.app"
+CORS_ORIGINS = [o.strip() for o in os.getenv("CORS_ORIGINS", "http://localhost:3000").split(",") if o.strip()]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.get("/health")
+async def health():
+    return {"ok": True}
 
 
 # ---------------------------------------------------------------------------

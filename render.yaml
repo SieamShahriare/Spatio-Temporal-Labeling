@@ -1,0 +1,26 @@
+# Render Blueprint for the FastAPI backend (free plan).
+# Secrets use `sync: false`: Render asks for their values in the dashboard when the
+# Blueprint is first created, so they never live in this repo.
+services:
+  - type: web
+    name: spatiotemporal-api
+    runtime: python
+    plan: free
+    branch: main
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.14.3
+      - key: ENV
+        value: production
+      - key: DATABASE_URL
+        sync: false
+      - key: LLM_PROVIDER
+        sync: false
+      - key: LLM_MODEL
+        sync: false
+      - key: LLM_API_KEY
+        sync: false
