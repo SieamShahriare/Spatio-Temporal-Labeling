@@ -13,7 +13,7 @@ services:
     healthCheckPath: /health
     envVars:
       - key: PYTHON_VERSION
-        value: 3.14.3
+        value: 3.12.7
       - key: ENV
         value: production
       - key: DATABASE_URL

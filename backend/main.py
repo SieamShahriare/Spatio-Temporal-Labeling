@@ -104,9 +104,6 @@ MAX_REBOOKS = 3
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     pool = await get_pool()
-    await pool.execute("ALTER TABLE spans DROP CONSTRAINT IF EXISTS spans_session_id_fkey")
-    await pool.execute("ALTER TABLE relations DROP CONSTRAINT IF EXISTS relations_session_id_fkey")
-    await pool.execute("ALTER TABLE matrix_snapshots DROP CONSTRAINT IF EXISTS matrix_snapshots_session_id_fkey")
     yield
     await close_pool()
 
@@ -321,7 +318,7 @@ async def save_matrix(session_id: int):
             await pool.execute(
                 """INSERT INTO relations (session_id, span_i_id, span_j_id, relation_code)
                    VALUES ($1,$2,$3,$4)
-                   ON CONFLICT (session_id, span_i_id, span_j_id)
+                   ON CONFLICT (session_id, span_i_id, span_j_id) WHERE session_id IS NOT NULL
                    DO UPDATE SET relation_code=$4""",
                 session_id, si["id"], sj["id"], code
             )
@@ -364,9 +361,16 @@ async def override_matrix_cell(session_id: int, body: MatrixOverride):
     await pool.execute(
         """INSERT INTO relations (session_id, span_i_id, span_j_id, relation_code, is_override)
            VALUES ($1,$2,$3,$4,TRUE)
-           ON CONFLICT (session_id, span_i_id, span_j_id)
+           ON CONFLICT (session_id, span_i_id, span_j_id) WHERE session_id IS NOT NULL
            DO UPDATE SET relation_code=$4, is_override=TRUE""",
         session_id, si_id, sj_id, body.relation_code
+    )
+    await pool.execute(
+        """INSERT INTO relations (session_id, span_i_id, span_j_id, relation_code, is_override)
+           VALUES ($1,$2,$3,$4,TRUE)
+           ON CONFLICT (session_id, span_i_id, span_j_id) WHERE session_id IS NOT NULL
+           DO UPDATE SET relation_code=$4, is_override=TRUE""",
+        session_id, sj_id, si_id, inv
     )
 
     return {"ok": True, "matrix": matrix}
@@ -980,8 +984,8 @@ async def release_batch(batch_id: int, request: Request, user=Depends(get_curren
 def _batch_span_to_out(row: dict, seq_label: str, batch_stem_id: int) -> dict:
     return {
         "id": row["id"],
-        "batch_stem_id": row["batch_stem_id"],
-        "session_id": -batch_stem_id,
+        "batch_stem_id": row.get("batch_stem_id") or batch_stem_id,
+        "session_id": row.get("session_id"),
         "label_type": row["label_type"],
         "seq_label": seq_label,
         "span_text": row["span_text"],
@@ -1011,7 +1015,8 @@ async def get_batch_stem(batch_stem_id: int, request: Request):
     if not bs:
         raise HTTPException(status_code=404, detail="Batch stem not found")
     batch = await pool.fetchrow("SELECT * FROM batches WHERE id = $1", bs["batch_id"])
-    if _ensure_aware(batch["expires_at"]) <= _now():        raise HTTPException(status_code=423, detail="Lock expired")
+    if _ensure_aware(batch["expires_at"]) <= _now():
+        raise HTTPException(status_code=423, detail="Lock expired")
     spans = await pool.fetch(
         "SELECT * FROM spans WHERE batch_stem_id = $1 ORDER BY created_at",
         batch_stem_id
@@ -1048,7 +1053,8 @@ async def create_batch_span(batch_stem_id: int, body: BatchSpanCreate, request: 
     )
     if not bs or bs["owner_id"] != user["id"]:
         raise HTTPException(status_code=404, detail="Batch stem not found")
-    if _ensure_aware(bs["expires_at"]) <= _now():        raise HTTPException(status_code=423, detail="Lock expired")
+    if _ensure_aware(bs["expires_at"]) <= _now():
+        raise HTTPException(status_code=423, detail="Lock expired")
     existing = await pool.fetch(
         "SELECT * FROM spans WHERE batch_stem_id = $1 ORDER BY created_at", batch_stem_id
     )
@@ -1056,9 +1062,9 @@ async def create_batch_span(batch_stem_id: int, body: BatchSpanCreate, request: 
     count = sum(1 for s in existing if s["label_type"] == body.label_type)
     seq_label = f"{prefix}{count + 1}"
     row = await pool.fetchrow(
-        """INSERT INTO spans (session_id, batch_stem_id, label_type, seq_label, span_text, char_start, char_end, tl_start, tl_end, source)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *""",
-        -batch_stem_id, batch_stem_id, body.label_type, seq_label,
+        """INSERT INTO spans (batch_stem_id, label_type, seq_label, span_text, char_start, char_end, tl_start, tl_end, source)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *""",
+        batch_stem_id, body.label_type, seq_label,
         body.span_text, body.char_start, body.char_end,
         body.tl_start, body.tl_end, body.source
     )
@@ -1102,7 +1108,8 @@ async def update_batch_span(batch_stem_id: int, span_id: int, body: SpanUpdate, 
     )
     if not bs or bs["owner_id"] != user["id"]:
         raise HTTPException(status_code=404, detail="Batch stem not found")
-    if _ensure_aware(bs["expires_at"]) <= _now():        raise HTTPException(status_code=423, detail="Lock expired")
+    if _ensure_aware(bs["expires_at"]) <= _now():
+        raise HTTPException(status_code=423, detail="Lock expired")
     span = await pool.fetchrow("SELECT * FROM spans WHERE id = $1 AND batch_stem_id = $2", span_id, batch_stem_id)
     if not span:
         raise HTTPException(status_code=404, detail="Span not found")
@@ -1120,11 +1127,13 @@ async def delete_batch_span(batch_stem_id: int, span_id: int, request: Request, 
     validate_csrf(request)
     pool = await get_pool()
     bs = await pool.fetchrow(
-        "SELECT bs.*, b.owner_id FROM batch_stems bs JOIN batches b ON b.id = bs.batch_id WHERE bs.id = $1",
+        "SELECT bs.*, b.owner_id, b.expires_at FROM batch_stems bs JOIN batches b ON b.id = bs.batch_id WHERE bs.id = $1",
         batch_stem_id
     )
     if not bs or bs["owner_id"] != user["id"]:
         raise HTTPException(status_code=404, detail="Batch stem not found")
+    if _ensure_aware(bs["expires_at"]) <= _now():
+        raise HTTPException(status_code=423, detail="Lock expired")
     span = await pool.fetchrow("SELECT * FROM spans WHERE id = $1 AND batch_stem_id = $2", span_id, batch_stem_id)
     if not span:
         raise HTTPException(status_code=404, detail="Span not found")
@@ -1142,7 +1151,8 @@ async def save_batch_matrix(batch_stem_id: int, request: Request, user=Depends(g
     )
     if not bs or bs["owner_id"] != user["id"]:
         raise HTTPException(status_code=404, detail="Batch stem not found")
-    if _ensure_aware(bs["expires_at"]) <= _now():        raise HTTPException(status_code=423, detail="Lock expired")
+    if _ensure_aware(bs["expires_at"]) <= _now():
+        raise HTTPException(status_code=423, detail="Lock expired")
     spans = await pool.fetch(
         "SELECT * FROM spans WHERE batch_stem_id = $1 AND label_type = 'Event' ORDER BY created_at",
         batch_stem_id
@@ -1151,30 +1161,29 @@ async def save_batch_matrix(batch_stem_id: int, request: Request, user=Depends(g
     matrix = build_matrix(span_list)
     span_order = [{"id": s["id"], "seq_label": s["seq_label"]} for s in span_list]
 
-    session_id = -batch_stem_id
     existing = await pool.fetchrow(
-        "SELECT id FROM matrix_snapshots WHERE session_id=$1", session_id
+        "SELECT id FROM matrix_snapshots WHERE batch_stem_id=$1", batch_stem_id
     )
     if existing:
         await pool.execute(
-            "UPDATE matrix_snapshots SET matrix_json=$1, span_order=$2, updated_at=now() WHERE session_id=$3",
-            json.dumps(matrix), json.dumps(span_order), session_id
+            "UPDATE matrix_snapshots SET matrix_json=$1, span_order=$2, updated_at=now() WHERE batch_stem_id=$3",
+            json.dumps(matrix), json.dumps(span_order), batch_stem_id
         )
     else:
         await pool.execute(
-            "INSERT INTO matrix_snapshots (session_id, matrix_json, span_order) VALUES ($1,$2,$3)",
-            session_id, json.dumps(matrix), json.dumps(span_order)
+            "INSERT INTO matrix_snapshots (batch_stem_id, matrix_json, span_order) VALUES ($1,$2,$3)",
+            batch_stem_id, json.dumps(matrix), json.dumps(span_order)
         )
 
     for i, si in enumerate(span_list):
         for j, sj in enumerate(span_list):
             code = matrix[i][j]
             await pool.execute(
-                """INSERT INTO relations (session_id, span_i_id, span_j_id, relation_code, batch_stem_id)
-                   VALUES ($1,$2,$3,$4,$5)
-                   ON CONFLICT (session_id, span_i_id, span_j_id)
-                   DO UPDATE SET relation_code=$4, batch_stem_id=$5""",
-                session_id, si["id"], sj["id"], code, batch_stem_id
+                """INSERT INTO relations (batch_stem_id, span_i_id, span_j_id, relation_code)
+                   VALUES ($1,$2,$3,$4)
+                   ON CONFLICT (batch_stem_id, span_i_id, span_j_id) WHERE batch_stem_id IS NOT NULL
+                   DO UPDATE SET relation_code=$4""",
+                batch_stem_id, si["id"], sj["id"], code
             )
 
     return {"ok": True, "matrix": matrix, "span_order": span_order}
@@ -1211,7 +1220,8 @@ async def override_batch_matrix(batch_stem_id: int, body: MatrixOverride, reques
     )
     if not bs or bs["owner_id"] != user["id"]:
         raise HTTPException(status_code=404, detail="Batch stem not found")
-    if _ensure_aware(bs["expires_at"]) <= _now():        raise HTTPException(status_code=423, detail="Lock expired")
+    if _ensure_aware(bs["expires_at"]) <= _now():
+        raise HTTPException(status_code=423, detail="Lock expired")
     spans = await pool.fetch(
         "SELECT * FROM spans WHERE batch_stem_id = $1 AND label_type = 'Event' ORDER BY created_at",
         batch_stem_id
@@ -1223,10 +1233,9 @@ async def override_batch_matrix(batch_stem_id: int, body: MatrixOverride, reques
     if body.i == body.j:
         raise HTTPException(status_code=400, detail="Cannot override diagonal")
 
-    session_id = -batch_stem_id
     snapshot = await pool.fetchrow(
-        "SELECT * FROM matrix_snapshots WHERE session_id=$1 ORDER BY updated_at DESC LIMIT 1",
-        session_id
+        "SELECT * FROM matrix_snapshots WHERE batch_stem_id=$1 ORDER BY updated_at DESC LIMIT 1",
+        batch_stem_id
     )
     if not snapshot:
         raise HTTPException(status_code=400, detail="Save matrix first before overriding")
@@ -1237,18 +1246,25 @@ async def override_batch_matrix(batch_stem_id: int, body: MatrixOverride, reques
     matrix[body.j][body.i] = inv
 
     await pool.execute(
-        "UPDATE matrix_snapshots SET matrix_json=$1, updated_at=now() WHERE session_id=$2",
-        json.dumps(matrix), session_id
+        "UPDATE matrix_snapshots SET matrix_json=$1, updated_at=now() WHERE batch_stem_id=$2",
+        json.dumps(matrix), batch_stem_id
     )
 
     si_id = span_list[body.i]["id"]
     sj_id = span_list[body.j]["id"]
     await pool.execute(
-        """INSERT INTO relations (session_id, span_i_id, span_j_id, relation_code, is_override, batch_stem_id)
-           VALUES ($1,$2,$3,$4,TRUE,$5)
-           ON CONFLICT (session_id, span_i_id, span_j_id)
-           DO UPDATE SET relation_code=$4, is_override=TRUE, batch_stem_id=$5""",
-        session_id, si_id, sj_id, body.relation_code, batch_stem_id
+        """INSERT INTO relations (batch_stem_id, span_i_id, span_j_id, relation_code, is_override)
+           VALUES ($1,$2,$3,$4,TRUE)
+           ON CONFLICT (batch_stem_id, span_i_id, span_j_id) WHERE batch_stem_id IS NOT NULL
+           DO UPDATE SET relation_code=$4, is_override=TRUE""",
+        batch_stem_id, si_id, sj_id, body.relation_code
+    )
+    await pool.execute(
+        """INSERT INTO relations (batch_stem_id, span_i_id, span_j_id, relation_code, is_override)
+           VALUES ($1,$2,$3,$4,TRUE)
+           ON CONFLICT (batch_stem_id, span_i_id, span_j_id) WHERE batch_stem_id IS NOT NULL
+           DO UPDATE SET relation_code=$4, is_override=TRUE""",
+        batch_stem_id, sj_id, si_id, inv
     )
     return {"ok": True, "matrix": matrix}
 
@@ -1359,19 +1375,18 @@ async def export_batch_json(batch_id: int, request: Request):
     }
     for bs in bs_list:
         spans = await pool.fetch("SELECT * FROM spans WHERE batch_stem_id=$1 ORDER BY created_at", bs["id"])
-        session_id = -bs["id"]
         snapshot = await pool.fetchrow(
-            "SELECT * FROM matrix_snapshots WHERE session_id=$1 ORDER BY updated_at DESC LIMIT 1",
-            session_id
+            "SELECT * FROM matrix_snapshots WHERE batch_stem_id=$1 ORDER BY updated_at DESC LIMIT 1",
+            bs["id"]
         )
-    batch_data["stems"].append({
-        "batch_stem_id": bs["id"],
-        "stem_id": bs["stem_id"],
-        "stem_text": bs["stem_text"],
-        "spans": [{k: _serialize(v) for k, v in dict(sp).items()} for sp in spans],
-        "matrix": json.loads(snapshot["matrix_json"]) if snapshot else [],
-        "span_order": json.loads(snapshot["span_order"]) if snapshot else [],
-    })
+        batch_data["stems"].append({
+            "batch_stem_id": bs["id"],
+            "stem_id": bs["stem_id"],
+            "stem_text": bs["stem_text"],
+            "spans": [{k: _serialize(v) for k, v in dict(sp).items()} for sp in spans],
+            "matrix": json.loads(snapshot["matrix_json"]) if snapshot else [],
+            "span_order": json.loads(snapshot["span_order"]) if snapshot else [],
+        })
     return batch_data
 
 
@@ -1388,10 +1403,9 @@ async def export_batch_stem_json(batch_stem_id: int, request: Request):
     stem_row = await pool.fetchrow("SELECT text FROM stems WHERE id=$1", bs["stem_id"])
     stem_text = stem_row["text"] if stem_row else ""
     spans = await pool.fetch("SELECT * FROM spans WHERE batch_stem_id=$1 ORDER BY created_at", batch_stem_id)
-    session_id = -bs["id"]
     snapshot = await pool.fetchrow(
-        "SELECT * FROM matrix_snapshots WHERE session_id=$1 ORDER BY updated_at DESC LIMIT 1",
-        session_id
+        "SELECT * FROM matrix_snapshots WHERE batch_stem_id=$1 ORDER BY updated_at DESC LIMIT 1",
+        batch_stem_id
     )
     return {
         "batch_stem_id": bs["id"],
@@ -1475,7 +1489,8 @@ def _overlaps(a_start, a_end, b_start, b_end) -> bool:
 # ---------------------------------------------------------------------------
 
 @app.post("/api/extract-events")
-async def extract_events(body: ExtractEventsRequest):
+async def extract_events(body: ExtractEventsRequest, request: Request, user=Depends(get_current_user)):
+    validate_csrf(request)
     text = (body.text or "").strip()
     if not text:
         return ExtractEventsResponse(events=[], skipped=[]).model_dump()
@@ -1538,7 +1553,8 @@ async def extract_events(body: ExtractEventsRequest):
 
 
 @app.post("/api/extract-timeline")
-async def extract_timeline(body: ExtractTimelineRequest):
+async def extract_timeline(body: ExtractTimelineRequest, request: Request, user=Depends(get_current_user)):
+    validate_csrf(request)
     pool = await get_pool()
     session_id = body.session_id
 
@@ -1645,7 +1661,8 @@ async def extract_timeline(body: ExtractTimelineRequest):
 
 
 @app.post("/api/llm-label-and-timeline")
-async def llm_label_and_timeline(body: LLMLabelAndTimelineRequest):
+async def llm_label_and_timeline(body: LLMLabelAndTimelineRequest, request: Request, user=Depends(get_current_user)):
+    validate_csrf(request)
     pool = await get_pool()
     batch_stem_id = body.batch_stem_id
     text = (body.text or "").strip()
@@ -1653,11 +1670,13 @@ async def llm_label_and_timeline(body: LLMLabelAndTimelineRequest):
         return LLMLabelAndTimelineResponse(events=[], skipped_events=[], timeline_updated=[], timeline_skipped=[]).model_dump()
 
     bs = await pool.fetchrow(
-        "SELECT bs.*, s.text AS stem_text FROM batch_stems bs JOIN stems s ON s.id = bs.stem_id WHERE bs.id=$1",
+        "SELECT bs.*, s.text AS stem_text, b.owner_id, b.expires_at FROM batch_stems bs JOIN stems s ON s.id = bs.stem_id JOIN batches b ON b.id = bs.batch_id WHERE bs.id=$1",
         batch_stem_id
     )
-    if not bs:
+    if not bs or bs["owner_id"] != user["id"]:
         raise HTTPException(status_code=404, detail="Batch stem not found")
+    if _ensure_aware(bs["expires_at"]) <= _now():
+        raise HTTPException(status_code=423, detail="Lock expired")
     stem_text = bs["stem_text"]
 
     async with pool.acquire() as conn:
@@ -1721,9 +1740,9 @@ async def llm_label_and_timeline(body: LLMLabelAndTimelineRequest):
                 event_count += 1
                 seq_label = f"E{event_count}"
                 row = await conn.fetchrow(
-                    """INSERT INTO spans (session_id, batch_stem_id, label_type, seq_label, span_text, char_start, char_end, tl_start, tl_end, source)
-                       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *""",
-                    -batch_stem_id, batch_stem_id, "Event", seq_label,
+                    """INSERT INTO spans (batch_stem_id, label_type, seq_label, span_text, char_start, char_end, tl_start, tl_end, source)
+                       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *""",
+                    batch_stem_id, "Event", seq_label,
                     event["span_text"], event["char_start"], event["char_end"],
                     10.0, 30.0, "llm"
                 )

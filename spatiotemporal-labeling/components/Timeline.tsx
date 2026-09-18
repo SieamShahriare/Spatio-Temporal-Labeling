@@ -52,10 +52,14 @@ export default function Timeline({ spans, onUpdateSpan, onExtractTimeline, extra
     origEnd: number;
   } | null>(null);
   const [hoveredSpanId, setHoveredSpanId] = useState<number | null>(null);
+  const [prevSpans, setPrevSpans] = useState<Span[]>(spans);
   const [localSpans, setLocalSpans] = useState<Span[]>(spans);
   const [snapGuides, setSnapGuides] = useState<number[]>([]);
 
-  useEffect(() => { setLocalSpans(spans); }, [spans]);
+  if (spans !== prevSpans) {
+    setPrevSpans(spans);
+    setLocalSpans(spans);
+  }
 
   const pxPerUnit = useMemo(() => trackWidthPx / (TIMELINE_MAX - TIMELINE_MIN), [trackWidthPx]);
 
@@ -156,7 +160,20 @@ export default function Timeline({ spans, onUpdateSpan, onExtractTimeline, extra
 
   const handleManualBlur = (spanId: number) => {
     const s = localSpans.find(x => x.id === spanId);
-    if (s) onUpdateSpan(s.id, s.tl_start, s.tl_end);
+    if (s) {
+      let start = Math.max(TIMELINE_MIN, Math.min(TIMELINE_MAX, s.tl_start));
+      let end = Math.max(TIMELINE_MIN, Math.min(TIMELINE_MAX, s.tl_end));
+      if (end < start) {
+        end = Math.min(TIMELINE_MAX, start + MIN_WIDTH);
+        if (end <= start) {
+          start = Math.max(TIMELINE_MIN, end - MIN_WIDTH);
+        }
+      }
+      start = round1(start);
+      end = round1(end);
+      setLocalSpans(prev => prev.map(item => item.id === spanId ? { ...item, tl_start: start, tl_end: end } : item));
+      onUpdateSpan(s.id, start, end);
+    }
   };
 
   if (localSpans.length === 0) {
