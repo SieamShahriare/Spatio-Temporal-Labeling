@@ -187,8 +187,9 @@ export default function StemsPage() {
           setTotal(data.total);
           setPage(data.page);
           setSelected(prev => {
-            const next = new Set<number>();
-            data.items.forEach(it => { if (prev.has(it.id) && it.state === 'available') next.add(it.id); });
+            // Keep selections across pages and filters; only drop stems that are no longer available.
+            const next = new Set(prev);
+            data.items.forEach(it => { if (it.state !== 'available') next.delete(it.id); });
             return next;
           });
         }
@@ -301,7 +302,7 @@ export default function StemsPage() {
           </button>
           <h1 style={{ fontSize: 18, fontWeight: 700, margin: 0 }}>Stems Browser</h1>
            <p style={{ fontSize: 13, color: 'var(--text-muted)', margin: '2px 0 0' }}>
-             {total} stems · select available stems to book, or switch to Available filter to book
+             {total} stems · select available stems to book them into a batch
           </p>
         </div>
         <button
@@ -378,43 +379,41 @@ export default function StemsPage() {
         >
           {STATUS_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
         </select>
-        {status === 'available' && (
-          <div style={{ flex: '1 1 100%', display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-            <input
-              type="text"
-              value={batchName}
-              onChange={e => setBatchName(e.target.value)}
-              placeholder="Batch name"
-              style={{
-                flex: '1 1 200px',
-                padding: '8px 12px',
-                border: '1px solid var(--border-input)',
-                borderRadius: 6,
-                fontSize: 14,
-                boxSizing: 'border-box',
-              }}
-            />
-            <button
-              onClick={handleBook}
-              disabled={booking || selected.size === 0}
-              style={{
-                padding: '8px 20px',
-                background: booking || selected.size === 0 ? 'var(--text-disabled)' : '#2563eb',
-                color: '#fff',
-                border: 'none',
-                borderRadius: 6,
-                cursor: booking || selected.size === 0 ? 'not-allowed' : 'pointer',
-                fontWeight: 600,
-                fontSize: 13,
-              }}
-            >
-              {booking ? 'Booking…' : `Book ${selected.size} stem${selected.size !== 1 ? 's' : ''}`}
-            </button>
-            <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>
-              {selected.size} selected
-            </span>
-          </div>
-        )}
+        <div style={{ flex: '1 1 100%', display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <input
+            type="text"
+            value={batchName}
+            onChange={e => setBatchName(e.target.value)}
+            placeholder="Batch name"
+            style={{
+              flex: '1 1 200px',
+              padding: '8px 12px',
+              border: '1px solid var(--border-input)',
+              borderRadius: 6,
+              fontSize: 14,
+              boxSizing: 'border-box',
+            }}
+          />
+          <button
+            onClick={handleBook}
+            disabled={booking || selected.size === 0}
+            style={{
+              padding: '8px 20px',
+              background: booking || selected.size === 0 ? 'var(--text-disabled)' : '#2563eb',
+              color: '#fff',
+              border: 'none',
+              borderRadius: 6,
+              cursor: booking || selected.size === 0 ? 'not-allowed' : 'pointer',
+              fontWeight: 600,
+              fontSize: 13,
+            }}
+          >
+            {booking ? 'Booking…' : `Book ${selected.size} stem${selected.size !== 1 ? 's' : ''}`}
+          </button>
+          <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+            {selected.size} selected
+          </span>
+        </div>
       </div>
 
       <div style={{

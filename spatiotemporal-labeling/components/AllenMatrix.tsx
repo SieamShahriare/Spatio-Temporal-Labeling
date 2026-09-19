@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { MatrixData, ALLEN_RELATIONS, ALLEN_CODES, SpanOrder } from '@/lib/types';
+import { MatrixData, ALLEN_RELATIONS, ALLEN_CODES } from '@/lib/types';
 
 interface Props {
   matrixData: MatrixData;

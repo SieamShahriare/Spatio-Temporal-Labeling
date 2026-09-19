@@ -3,7 +3,7 @@ LLM provider adapter — provider-agnostic via environment variables.
 
 Supported env vars (all required unless noted):
   LLM_PROVIDER    anthropic | openai | gemini | openai-compatible | openrouter
-  LLM_MODEL       e.g. claude-sonnet-4-5, gpt-4.1, gemini-2.5-pro
+  LLM_MODEL       e.g. claude-sonnet-4-5, gpt-4.1, gemini-2.5-pro, google/gemini-3.1-flash-lite
   LLM_API_KEY
   LLM_BASE_URL    optional; used by openai/openai-compatible providers. openrouter ignores this and always uses https://openrouter.ai/api/v1
 """
@@ -17,10 +17,15 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-LLM_PROVIDER = os.getenv("LLM_PROVIDER", "").strip()
-LLM_MODEL = os.getenv("LLM_MODEL", "").strip()
-LLM_API_KEY = os.getenv("LLM_API_KEY", "").strip()
-LLM_BASE_URL = os.getenv("LLM_BASE_URL", "").strip()
+
+def _get_config() -> dict:
+    load_dotenv(override=True)
+    return {
+        "provider": os.getenv("LLM_PROVIDER", "").strip().lower(),
+        "model": os.getenv("LLM_MODEL", "").strip(),
+        "api_key": os.getenv("LLM_API_KEY", "").strip(),
+        "base_url": os.getenv("LLM_BASE_URL", "").strip(),
+    }
 
 
 def _strip_fences(text: str) -> str:
@@ -42,12 +47,13 @@ async def callLLM(system: str, user: str) -> dict:
     Retries once with a stricter prompt on invalid JSON.
     Temperature is always 0.
     """
-    provider = LLM_PROVIDER.lower()
+    cfg = _get_config()
+    provider = cfg["provider"]
     if not provider:
         raise ValueError("LLM_PROVIDER is not set in environment.")
-    if not LLM_MODEL:
+    if not cfg["model"]:
         raise ValueError("LLM_MODEL is not set in environment.")
-    if not LLM_API_KEY:
+    if not cfg["api_key"]:
         raise ValueError("LLM_API_KEY is not set in environment.")
 
     attempts = [{"system": system, "user": user}]
@@ -59,7 +65,7 @@ async def callLLM(system: str, user: str) -> dict:
     last_raw = ""
     for attempt in attempts:
         try:
-            last_raw = await _call_provider(provider, attempt["system"], attempt["user"])
+            last_raw = await _call_provider(cfg, attempt["system"], attempt["user"])
         except Exception as exc:
             raise ValueError(f"LLM request failed ({provider}): {exc}") from exc
 
@@ -73,29 +79,30 @@ async def callLLM(system: str, user: str) -> dict:
     )
 
 
-async def _call_provider(provider: str, system: str, user: str) -> str:
+async def _call_provider(cfg: dict, system: str, user: str) -> str:
+    provider = cfg["provider"]
     timeout = httpx.Timeout(60.0, connect=10.0)
     async with httpx.AsyncClient(timeout=timeout) as client:
         if provider == "anthropic":
-            return await _call_anthropic(client, system, user)
+            return await _call_anthropic(client, cfg, system, user)
         elif provider in ("openai", "openai-compatible", "openrouter"):
-            return await _call_openai_compatible(client, provider, system, user)
+            return await _call_openai_compatible(client, cfg, system, user)
         elif provider == "gemini":
-            return await _call_gemini(client, system, user)
+            return await _call_gemini(client, cfg, system, user)
         else:
             raise ValueError(f"Unsupported LLM_PROVIDER: '{provider}'. Use anthropic | openai | gemini | openai-compatible | openrouter")
 
 
-async def _call_anthropic(client: httpx.AsyncClient, system: str, user: str) -> str:
+async def _call_anthropic(client: httpx.AsyncClient, cfg: dict, system: str, user: str) -> str:
     resp = await client.post(
         "https://api.anthropic.com/v1/messages",
         headers={
-            "x-api-key": LLM_API_KEY,
+            "x-api-key": cfg["api_key"],
             "anthropic-version": "2023-06-01",
             "Content-Type": "application/json",
         },
         json={
-            "model": LLM_MODEL,
+            "model": cfg["model"],
             "max_tokens": 4096,
             "temperature": 0,
             "system": system,
@@ -108,14 +115,15 @@ async def _call_anthropic(client: httpx.AsyncClient, system: str, user: str) -> 
     return "".join(p.get("text", "") for p in parts if isinstance(p, dict) and p.get("type") == "text")
 
 
-async def _call_openai_compatible(client: httpx.AsyncClient, provider: str, system: str, user: str) -> str:
+async def _call_openai_compatible(client: httpx.AsyncClient, cfg: dict, system: str, user: str) -> str:
+    provider = cfg["provider"]
     if provider == "openrouter":
         base_url = "https://openrouter.ai/api/v1"
     else:
-        base_url = LLM_BASE_URL or "https://api.openai.com/v1"
+        base_url = cfg["base_url"] or "https://api.openai.com/v1"
     base_url = base_url.rstrip("/")
     payload = {
-        "model": LLM_MODEL,
+        "model": cfg["model"],
         "temperature": 0,
         "messages": [
             {"role": "system", "content": system},
@@ -127,7 +135,7 @@ async def _call_openai_compatible(client: httpx.AsyncClient, provider: str, syst
     resp = await client.post(
         f"{base_url}/chat/completions",
         headers={
-            "Authorization": f"Bearer {LLM_API_KEY}",
+            "Authorization": f"Bearer {cfg['api_key']}",
             "Content-Type": "application/json",
         },
         json=payload,
@@ -143,10 +151,10 @@ async def _call_openai_compatible(client: httpx.AsyncClient, provider: str, syst
     return choices[0]["message"]["content"]
 
 
-async def _call_gemini(client: httpx.AsyncClient, system: str, user: str) -> str:
+async def _call_gemini(client: httpx.AsyncClient, cfg: dict, system: str, user: str) -> str:
     url = (
-        f"https://generativelanguage.googleapis.com/v1beta/models/{LLM_MODEL}:generateContent"
-        f"?key={LLM_API_KEY}"
+        f"https://generativelanguage.googleapis.com/v1beta/models/{cfg['model']}:generateContent"
+        f"?key={cfg['api_key']}"
     )
     resp = await client.post(
         url,

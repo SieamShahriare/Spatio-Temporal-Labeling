@@ -17,13 +17,28 @@ const LABEL_WIDTH = 220;
 const MIN_WIDTH = 5;
 const TIMELINE_MIN = 0;
 const TIMELINE_MAX = 100;
+const SNAP_THRESHOLD_PX = 8;
+const SNAP_EPSILON = 1e-6;
+const FIXED_SNAP_TARGETS = [TIMELINE_MIN, 50, TIMELINE_MAX];
 
 const getSpanMetrics = (span: Span, trackWidthPx: number, pxPerUnit: number) => {
   const leftPx = (span.tl_start / (TIMELINE_MAX - TIMELINE_MIN)) * trackWidthPx;
   const rawWidthPx = ((span.tl_end - span.tl_start) / (TIMELINE_MAX - TIMELINE_MIN)) * trackWidthPx;
-  const widthPx = Math.max(MIN_WIDTH * pxPerUnit, rawWidthPx) - 16;
-  const finalWidth = Math.max(5, widthPx);
+  const finalWidth = Math.max(5, MIN_WIDTH * pxPerUnit, rawWidthPx);
   return { leftPx, finalWidth };
+};
+
+const round1 = (v: number) => Math.round(v * 10) / 10;
+
+// Nearest target within threshold, or null when nothing is close enough.
+const findSnap = (value: number, targets: number[], threshold: number): number | null => {
+  let best: number | null = null;
+  let bestDist = threshold;
+  for (const t of targets) {
+    const d = Math.abs(t - value);
+    if (d <= bestDist) { best = t; bestDist = d; }
+  }
+  return best;
 };
 
 export default function Timeline({ spans, onUpdateSpan, onExtractTimeline, extractingTimeline = false }: Props) {
@@ -37,9 +52,14 @@ export default function Timeline({ spans, onUpdateSpan, onExtractTimeline, extra
     origEnd: number;
   } | null>(null);
   const [hoveredSpanId, setHoveredSpanId] = useState<number | null>(null);
+  const [prevSpans, setPrevSpans] = useState<Span[]>(spans);
   const [localSpans, setLocalSpans] = useState<Span[]>(spans);
+  const [snapGuides, setSnapGuides] = useState<number[]>([]);
 
-  useEffect(() => { setLocalSpans(spans); }, [spans]);
+  if (spans !== prevSpans) {
+    setPrevSpans(spans);
+    setLocalSpans(spans);
+  }
 
   const pxPerUnit = useMemo(() => trackWidthPx / (TIMELINE_MAX - TIMELINE_MIN), [trackWidthPx]);
 
@@ -67,27 +87,61 @@ export default function Timeline({ spans, onUpdateSpan, onExtractTimeline, extra
     const onMove = (e: MouseEvent) => {
       const dx = e.clientX - dragging.startX;
       const dUnits = dx / pxPerUnit;
-      setLocalSpans(prev => prev.map(s => {
-        if (s.id !== dragging.spanId) return s;
-        let start = s.tl_start;
-        let end = s.tl_end;
-        if (dragging.mode === 'move') {
-          const len = dragging.origEnd - dragging.origStart;
-          start = Math.max(TIMELINE_MIN, Math.min(TIMELINE_MAX - len, dragging.origStart + dUnits));
-          end = start + len;
-        } else if (dragging.mode === 'resize-left') {
-          start = Math.max(TIMELINE_MIN, Math.min(dragging.origEnd - MIN_WIDTH, dragging.origStart + dUnits));
-        } else {
-          end = Math.min(TIMELINE_MAX, Math.max(dragging.origStart + MIN_WIDTH, dragging.origEnd + dUnits));
-        }
-        return { ...s, tl_start: Math.round(start * 10) / 10, tl_end: Math.round(end * 10) / 10 };
-      }));
+      const current = localSpans.find(s => s.id === dragging.spanId);
+      if (!current) return;
+
+      // Hold Alt to drag freely without snapping.
+      const snapEnabled = !e.altKey;
+      const threshold = SNAP_THRESHOLD_PX / pxPerUnit;
+      const targets = snapEnabled
+        ? [
+            ...FIXED_SNAP_TARGETS,
+            ...localSpans.filter(s => s.id !== dragging.spanId).flatMap(s => [s.tl_start, s.tl_end]),
+          ]
+        : [];
+
+      let start = current.tl_start;
+      let end = current.tl_end;
+      if (dragging.mode === 'move') {
+        const len = dragging.origEnd - dragging.origStart;
+        start = Math.max(TIMELINE_MIN, Math.min(TIMELINE_MAX - len, dragging.origStart + dUnits));
+        end = start + len;
+        const snapStart = findSnap(start, targets, threshold);
+        const snapEnd = findSnap(end, targets, threshold);
+        const shiftStart = snapStart === null ? null : snapStart - start;
+        const shiftEnd = snapEnd === null ? null : snapEnd - end;
+        let shift = 0;
+        if (shiftStart !== null && (shiftEnd === null || Math.abs(shiftStart) <= Math.abs(shiftEnd))) shift = shiftStart;
+        else if (shiftEnd !== null) shift = shiftEnd;
+        start = Math.max(TIMELINE_MIN, Math.min(TIMELINE_MAX - len, start + shift));
+        end = start + len;
+      } else if (dragging.mode === 'resize-left') {
+        const maxStart = dragging.origEnd - MIN_WIDTH;
+        start = Math.max(TIMELINE_MIN, Math.min(maxStart, dragging.origStart + dUnits));
+        const snap = findSnap(start, targets.filter(t => t <= maxStart), threshold);
+        if (snap !== null) start = snap;
+      } else {
+        const minEnd = dragging.origStart + MIN_WIDTH;
+        end = Math.min(TIMELINE_MAX, Math.max(minEnd, dragging.origEnd + dUnits));
+        const snap = findSnap(end, targets.filter(t => t >= minEnd), threshold);
+        if (snap !== null) end = snap;
+      }
+
+      start = round1(start);
+      end = round1(end);
+      setSnapGuides(
+        [start, end].filter(v => targets.some(t => Math.abs(t - v) < SNAP_EPSILON))
+      );
+      setLocalSpans(prev => prev.map(s =>
+        s.id === dragging.spanId ? { ...s, tl_start: start, tl_end: end } : s
+      ));
     };
     const onUp = () => {
       if (dragging) {
         const updated = localSpans.find(s => s.id === dragging.spanId);
         if (updated) onUpdateSpan(updated.id, updated.tl_start, updated.tl_end);
       }
+      setSnapGuides([]);
       setDragging(null);
     };
     window.addEventListener('mousemove', onMove);
@@ -106,7 +160,20 @@ export default function Timeline({ spans, onUpdateSpan, onExtractTimeline, extra
 
   const handleManualBlur = (spanId: number) => {
     const s = localSpans.find(x => x.id === spanId);
-    if (s) onUpdateSpan(s.id, s.tl_start, s.tl_end);
+    if (s) {
+      let start = Math.max(TIMELINE_MIN, Math.min(TIMELINE_MAX, s.tl_start));
+      let end = Math.max(TIMELINE_MIN, Math.min(TIMELINE_MAX, s.tl_end));
+      if (end < start) {
+        end = Math.min(TIMELINE_MAX, start + MIN_WIDTH);
+        if (end <= start) {
+          start = Math.max(TIMELINE_MIN, end - MIN_WIDTH);
+        }
+      }
+      start = round1(start);
+      end = round1(end);
+      setLocalSpans(prev => prev.map(item => item.id === spanId ? { ...item, tl_start: start, tl_end: end } : item));
+      onUpdateSpan(s.id, start, end);
+    }
   };
 
   if (localSpans.length === 0) {
@@ -182,8 +249,7 @@ export default function Timeline({ spans, onUpdateSpan, onExtractTimeline, extra
           {localSpans.map((span, idx) => {
             const colors = colorForSpan(span);
             const top = idx * (TRACK_HEIGHT + TRACK_GAP);
-            const leftPx = (span.tl_start / (TIMELINE_MAX - TIMELINE_MIN)) * trackWidthPx;
-            const widthPx = Math.max(MIN_WIDTH * pxPerUnit, ((span.tl_end - span.tl_start) / (TIMELINE_MAX - TIMELINE_MIN)) * trackWidthPx) - 16;
+            const { leftPx, finalWidth } = getSpanMetrics(span, trackWidthPx, pxPerUnit);
 
             return (
               <div key={span.id} style={{ position: 'absolute', top, left: 0, right: 0, height: TRACK_HEIGHT }}>
@@ -216,7 +282,7 @@ export default function Timeline({ spans, onUpdateSpan, onExtractTimeline, extra
                     style={{
                       position: 'absolute',
                       left: leftPx,
-                      width: Math.max(5, widthPx),
+                      width: finalWidth,
                       height: TRACK_HEIGHT,
                       background: colors.bg,
                       borderRadius: 4,
@@ -262,6 +328,31 @@ export default function Timeline({ spans, onUpdateSpan, onExtractTimeline, extra
             );
           })}
           <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: 2 }}>
+            {dragging && snapGuides.map(v => {
+              // Span every row that shares this edge, like Canva's alignment guides.
+              const rows = localSpans
+                .map((s, i) => (Math.abs(s.tl_start - v) < SNAP_EPSILON || Math.abs(s.tl_end - v) < SNAP_EPSILON ? i : -1))
+                .filter(i => i >= 0);
+              if (rows.length === 0) return null;
+              const minRow = Math.min(...rows);
+              const maxRow = Math.max(...rows);
+              const top = rows.length > 1 ? minRow * (TRACK_HEIGHT + TRACK_GAP) - 4 : 0;
+              const bottom = rows.length > 1 ? maxRow * (TRACK_HEIGHT + TRACK_GAP) + TRACK_HEIGHT + 4 : totalHeight;
+              return (
+                <div
+                  key={`snap-${v}`}
+                  style={{
+                    position: 'absolute',
+                    left: LABEL_WIDTH + v * pxPerUnit - 0.5,
+                    top,
+                    height: bottom - top,
+                    width: 1,
+                    background: '#ec4899',
+                    boxShadow: '0 0 4px rgba(236,72,153,0.6)',
+                  }}
+                />
+              );
+            })}
             {(() => {
               const activeId = dragging?.spanId ?? hoveredSpanId;
               if (activeId === null) return null;

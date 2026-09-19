@@ -103,7 +103,7 @@ export default function DashboardPage() {
     setRebooking(true);
     try {
       const res = await rebookBatch(id);
-      const now = Date.now(); // eslint-disable-line react-hooks/purity
+      const now = Date.now();
       const newExpires = new Date(now + res.remaining_seconds * 1000).toISOString();
       setBatches(prev => prev.map(b => b.id === id ? { ...b, expires_at: newExpires, rebook_count: b.rebook_count + 1 } : b));
       if (detail && detail.id === id) {

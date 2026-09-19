@@ -31,6 +31,45 @@ export default function TextLabeler({ stemText, spans, onAddSpan, onDeleteSpan, 
     await onExtractEvents(stemText);
   }, [onExtractEvents, stemText]);
 
+function getStemCharOffset(container: HTMLElement, node: Node, offset: number): number {
+  const targetElement = node.nodeType === Node.ELEMENT_NODE ? (node as HTMLElement) : node.parentElement;
+  const segEl = targetElement?.closest('[data-segment-start]');
+  if (segEl) {
+    const segStart = parseInt(segEl.getAttribute('data-segment-start') || '0', 10);
+    const stemSpan = segEl.querySelector('[data-stem-text]') || segEl;
+    let charOffsetInSeg = 0;
+    const walker = document.createTreeWalker(stemSpan, NodeFilter.SHOW_TEXT);
+    let curr = walker.nextNode();
+    while (curr) {
+      if (curr === node) {
+        return segStart + charOffsetInSeg + offset;
+      }
+      charOffsetInSeg += curr.nodeValue?.length || 0;
+      curr = walker.nextNode();
+    }
+    return segStart + charOffsetInSeg;
+  }
+
+  let totalChars = 0;
+  const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, {
+    acceptNode(n) {
+      if (n.parentElement?.closest('button') || n.parentElement?.closest('.hover-actions-dropdown')) {
+        return NodeFilter.FILTER_REJECT;
+      }
+      return NodeFilter.FILTER_ACCEPT;
+    }
+  });
+  let curr = walker.nextNode();
+  while (curr) {
+    if (curr === node) {
+      return totalChars + offset;
+    }
+    totalChars += curr.nodeValue?.length || 0;
+    curr = walker.nextNode();
+  }
+  return totalChars;
+}
+
   const handleMouseUp = useCallback(() => {
     const selection = window.getSelection();
     if (!selection || selection.isCollapsed) return;
@@ -39,18 +78,35 @@ export default function TextLabeler({ stemText, spans, onAddSpan, onDeleteSpan, 
     const container = document.getElementById('text-labeler-content');
     if (!container || !container.contains(range.commonAncestorContainer)) return;
 
-    const preRange = document.createRange();
-    preRange.setStart(container, 0);
-    preRange.setEnd(range.startContainer, range.startOffset);
-    const charStart = preRange.toString().length;
-    const trimmedLength = range.toString().trim().length;
-    const charEnd = charStart + trimmedLength;
-    const spanText = range.toString().trim();
+    const rawStart = getStemCharOffset(container, range.startContainer, range.startOffset);
+    const rawEnd = getStemCharOffset(container, range.endContainer, range.endOffset);
+    const start = Math.min(rawStart, rawEnd);
+    const end = Math.max(rawStart, rawEnd);
 
-    if (!spanText) return;
+    const rawSlice = stemText.slice(start, end);
+    const selectedText = range.toString().trim();
+    if (!selectedText) return;
+
+    const leadingWhitespace = rawSlice.length - rawSlice.trimStart().length;
+    let charStart = start + leadingWhitespace;
+    let charEnd = charStart + selectedText.length;
+
+    if (stemText.slice(charStart, charEnd) !== selectedText) {
+      const searchWindowStart = Math.max(0, charStart - 30);
+      const searchWindow = stemText.slice(searchWindowStart, charEnd + 30);
+      const foundRel = searchWindow.indexOf(selectedText);
+      if (foundRel !== -1) {
+        charStart = searchWindowStart + foundRel;
+        charEnd = charStart + selectedText.length;
+      }
+    }
+
+    const spanText = stemText.slice(charStart, charEnd);
+    if (!spanText.trim()) return;
+
     selection.removeAllRanges();
     onAddSpan(pendingType, spanText, charStart, charEnd);
-  }, [pendingType, onAddSpan]);
+  }, [pendingType, onAddSpan, stemText]);
 
   const segments = getSegments(stemText, spans);
 
@@ -132,7 +188,16 @@ export default function TextLabeler({ stemText, spans, onAddSpan, onDeleteSpan, 
       >
         {segments.map((seg) => {
           if (seg.spans.length === 0) {
-            return <span key={`${seg.start}-${seg.end}`}>{seg.text}</span>;
+            return (
+              <span
+                key={`${seg.start}-${seg.end}`}
+                data-segment-start={seg.start}
+                data-segment-end={seg.end}
+                data-stem-text="true"
+              >
+                {seg.text}
+              </span>
+            );
           }
           const s = seg.spans[0];
           const colors = colorForSpan(s);
@@ -143,6 +208,8 @@ export default function TextLabeler({ stemText, spans, onAddSpan, onDeleteSpan, 
             return (
              <mark
               key={segKey}
+              data-segment-start={seg.start}
+              data-segment-end={seg.end}
               onMouseEnter={() => setHoveredSegment(segKey)}
               onMouseLeave={() => setHoveredSegment(null)}
               title={actions.length === 1 ? `${s.seq_label}: ${s.span_text}` : undefined}
@@ -160,7 +227,7 @@ export default function TextLabeler({ stemText, spans, onAddSpan, onDeleteSpan, 
                 cursor: 'default',
               }}
             >
-              <span>{seg.text}</span>
+              <span data-stem-text="true">{seg.text}</span>
               {isHovered && (
                 <span
                   style={{
