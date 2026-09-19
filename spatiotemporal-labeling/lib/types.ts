@@ -213,3 +213,93 @@ export interface LLMLabelAndTimelineResponse {
   timeline_skipped: Array<{ text: string; reason: string }>;
 }
 
+// ====== Group annotation (inter-annotator agreement) types ======
+// See context/cohen_kappa.md for the design.
+
+export interface UserBrief {
+  id: number;
+  username: string;
+  email: string;
+}
+
+export type GroupTaskStatus =
+  | 'event_pending'
+  | 'timelines_pending'
+  | 'computing'
+  | 'accepted'
+  | 'accepted_flagged'
+  | 'adjudication'
+  | 'rejected';
+
+export type GroupMemberRole = 'event_annotator' | 'timeline_annotator';
+export type GroupMemberStatus = 'pending' | 'in_progress' | 'done';
+
+export interface GroupMemberOut {
+  id: number;
+  user_id: number;
+  username: string;
+  role: GroupMemberRole;
+  status: GroupMemberStatus;
+  annotator_index: number | null;
+  started_at: string | null;
+  completed_at: string | null;
+}
+
+export interface GroupTaskOut {
+  id: number;
+  stem_id: number;
+  stem_text: string;
+  status: GroupTaskStatus;
+  created_by: number;
+  created_at: string;
+  updated_at: string;
+  acceptance_threshold: number;
+  members: GroupMemberOut[];
+}
+
+export interface AgreementDetails {
+  member_ids: number[];
+  per_event: Record<string, Record<string, [number, number]>>;
+}
+
+export interface GroupTaskDetailOut extends GroupTaskOut {
+  krippendorff_alpha: number | null;
+  cohens_kappa_avg: number | null;
+  fleiss_kappa: number | null;
+  agreement_details: AgreementDetails | null;
+}
+
+export interface GroupEventSpanOut {
+  id: number;
+  group_task_id: number;
+  label_type: string;
+  seq_label: string;
+  span_text: string;
+  char_start: number;
+  char_end: number;
+  created_at: string;
+}
+
+export interface TimelinePositionOut {
+  span_id: number;
+  seq_label: string;
+  span_text: string;
+  tl_start: number;
+  tl_end: number;
+}
+
+export interface MyTimelineResponse {
+  member_status: GroupMemberStatus;
+  positions: TimelinePositionOut[];
+}
+
+export interface GroupAgreementOut {
+  task_id: number;
+  status: GroupTaskStatus;
+  krippendorff_alpha: number | null;
+  cohens_kappa_avg: number | null;
+  fleiss_kappa: number | null;
+  acceptance_threshold: number;
+  agreement_details: AgreementDetails | null;
+}
+

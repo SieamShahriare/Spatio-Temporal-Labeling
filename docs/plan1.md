@@ -107,15 +107,15 @@ A web application for annotating short text passages (stems) with **Event** and 
 
 The 13 Allen relations are encoded as signed integers. The ordering follows the standard table from the Wikipedia article on Allen's Interval Algebra.
 
-| Code | Relation Name   | Symbol | Inverse Code | Inverse Name     |
-|------|-----------------|--------|--------------|------------------|
-| +1   | precedes        | <      | -1           | preceded-by (>)  |
-| +2   | meets           | m      | -2           | met-by (mi)      |
-| +3   | overlaps        | o      | -3           | overlapped-by (oi)|
-| +4   | starts          | s      | -4           | started-by (si)  |
-| +5   | during          | d      | -5           | contains (di)    |
-| +6   | finishes        | f      | -6           | finished-by (fi) |
-| +7   | equals          | =      | +7           | equals (symmetric)|
+| Code | Relation Name   | Symbol | Inverse Code | Inverse Name         |
+|------|-----------------|--------|--------------|------------------    |
+| +1   | precedes        | <      | -1           | preceded-by (>)      |
+| +2   | meets           | m      | -2           | met-by (mi)          |
+| +3   | overlaps        | o      | -3           | overlapped-by (oi)   |
+| +4   | starts          | s      | -4           | started-by (si)      |
+| +5   | during          | d      | -5           | contains (di)        |
+| +6   | finishes        | f      | -6           | finished-by (fi)     |
+| +7   | equals          | =      | +7           | equals (symmetric)   |
 
 ### Matrix Rules
 

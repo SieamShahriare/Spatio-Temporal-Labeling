@@ -152,6 +152,21 @@ export default function DashboardPage() {
             + Build Batch
           </button>
           <button
+            onClick={() => router.push('/group-tasks')}
+            style={{
+              padding: '8px 16px',
+              background: 'var(--surface)',
+              color: 'var(--text-primary)',
+              border: '1px solid var(--border-input)',
+              borderRadius: 6,
+              cursor: 'pointer',
+              fontWeight: 500,
+              fontSize: 13,
+            }}
+          >
+            Group Tasks
+          </button>
+          <button
             onClick={handleLogout}
             style={{
               padding: '8px 16px',

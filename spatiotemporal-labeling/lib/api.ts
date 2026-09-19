@@ -82,6 +82,7 @@ export interface StemFilter {
   search?: string;
   status?: string;
   page?: number;
+  page_size?: number;
 }
 
 export const listStems = (filter: StemFilter = {}) => {
@@ -89,6 +90,7 @@ export const listStems = (filter: StemFilter = {}) => {
   if (filter.search) params.set('search', filter.search);
   if (filter.status) params.set('status', filter.status);
   if (filter.page) params.set('page', String(filter.page));
+  if (filter.page_size) params.set('page_size', String(filter.page_size));
   const qs = params.toString();
   return apiFetch(`/stems${qs ? `?${qs}` : ''}`);
 };
@@ -236,3 +238,41 @@ export const updateSpan = (spanId: number, tl_start: number, tl_end: number) =>
 
 export const deleteSpan = (spanId: number) =>
   apiFetch(`/spans/${spanId}`, { method: 'DELETE' });
+
+// ====== Group annotation workflow (inter-annotator agreement) ======
+// See context/cohen_kappa.md for the design.
+
+export const listUsers = () => apiFetch('/users');
+
+export const createGroupTask = (data: { stem_id: number; event_user_id: number; timeline_user_ids: number[] }) =>
+  apiFetch('/group-tasks', { method: 'POST', body: JSON.stringify(data) });
+
+export const listGroupTasks = () => apiFetch('/group-tasks');
+
+export const getGroupTasksDashboard = () => apiFetch('/group-tasks/dashboard');
+
+export const getGroupTask = (taskId: number) => apiFetch(`/group-tasks/${taskId}`);
+
+export const listGroupEvents = (taskId: number) => apiFetch(`/group-tasks/${taskId}/events`);
+
+export const createGroupEvent = (taskId: number, data: { span_text: string; char_start: number; char_end: number }) =>
+  apiFetch(`/group-tasks/${taskId}/events`, { method: 'POST', body: JSON.stringify(data) });
+
+export const deleteGroupEvent = (taskId: number, spanId: number) =>
+  apiFetch(`/group-tasks/${taskId}/events/${spanId}`, { method: 'DELETE' });
+
+export const submitGroupEvents = (taskId: number) =>
+  apiFetch(`/group-tasks/${taskId}/submit-events`, { method: 'POST' });
+
+export const getMyTimeline = (taskId: number) => apiFetch(`/group-tasks/${taskId}/my-timeline`);
+
+export const upsertMyTimeline = (taskId: number, positions: Array<{ span_id: number; tl_start: number; tl_end: number }>) =>
+  apiFetch(`/group-tasks/${taskId}/my-timeline`, { method: 'PUT', body: JSON.stringify({ positions }) });
+
+export const submitGroupTimeline = (taskId: number) =>
+  apiFetch(`/group-tasks/${taskId}/submit-timeline`, { method: 'POST' });
+
+export const getGroupAgreement = (taskId: number) => apiFetch(`/group-tasks/${taskId}/agreement`);
+
+export const decideGroupTask = (taskId: number, decision: string) =>
+  apiFetch(`/group-tasks/${taskId}/accept`, { method: 'POST', body: JSON.stringify({ decision }) });
