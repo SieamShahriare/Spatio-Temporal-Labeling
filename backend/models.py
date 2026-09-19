@@ -223,3 +223,99 @@ class BatchSpanOut(BaseModel):
 class ConflictResponse(BaseModel):
     message: str
     conflict_stem_ids: List[int]
+
+
+# ---------------------------------------------------------------------------
+# Group annotation workflow (inter-annotator agreement)
+# ---------------------------------------------------------------------------
+
+class GroupTaskCreate(BaseModel):
+    stem_id: int
+    event_user_id: int
+    timeline_user_ids: List[int] = Field(..., min_length=2)
+
+
+class GroupMemberOut(BaseModel):
+    id: int
+    user_id: int
+    username: str
+    role: str
+    status: str
+    annotator_index: Optional[int] = None
+    started_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+
+
+class GroupTaskOut(BaseModel):
+    id: int
+    stem_id: int
+    stem_text: str
+    status: str
+    created_by: int
+    created_at: datetime
+    updated_at: datetime
+    acceptance_threshold: float
+    members: List[GroupMemberOut] = []
+
+
+class GroupTaskDetailOut(GroupTaskOut):
+    krippendorff_alpha: Optional[float] = None
+    cohens_kappa_avg: Optional[float] = None
+    fleiss_kappa: Optional[float] = None
+    agreement_details: Optional[Dict[str, Any]] = None
+
+
+class GroupEventSpanCreate(BaseModel):
+    label_type: str = "Event"
+    span_text: str
+    char_start: int
+    char_end: int
+
+
+class GroupEventSpanOut(BaseModel):
+    id: int
+    group_task_id: int
+    label_type: str
+    seq_label: str
+    span_text: str
+    char_start: int
+    char_end: int
+    created_at: datetime
+
+
+class TimelinePositionIn(BaseModel):
+    span_id: int
+    tl_start: float
+    tl_end: float
+
+
+class TimelineUpsertRequest(BaseModel):
+    positions: List[TimelinePositionIn]
+
+
+class TimelinePositionOut(BaseModel):
+    span_id: int
+    seq_label: str
+    span_text: str
+    tl_start: float
+    tl_end: float
+
+
+class GroupAgreementOut(BaseModel):
+    task_id: int
+    status: str
+    krippendorff_alpha: Optional[float] = None
+    cohens_kappa_avg: Optional[float] = None
+    fleiss_kappa: Optional[float] = None
+    acceptance_threshold: float
+    agreement_details: Optional[Dict[str, Any]] = None
+
+
+class GroupTaskDecision(BaseModel):
+    decision: str  # 'accepted' | 'accepted_flagged' | 'adjudication' | 'rejected'
+
+
+class UserBriefOut(BaseModel):
+    id: int
+    username: str
+    email: str

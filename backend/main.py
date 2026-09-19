@@ -26,6 +26,10 @@ from models import (
     BatchCreate, BatchOut, BatchDetailOut,
     BatchSpanCreate, BatchSpanOut,
     ConflictResponse,
+    GroupTaskCreate, GroupTaskOut, GroupTaskDetailOut, GroupMemberOut,
+    GroupEventSpanCreate, GroupEventSpanOut,
+    TimelineUpsertRequest, TimelinePositionOut,
+    GroupAgreementOut, GroupTaskDecision, UserBriefOut,
 )
 from auth import (
     hash_password, verify_password,
@@ -36,6 +40,7 @@ from auth import (
 from allen.relations import build_matrix, RELATION_NAMES, INVERSES
 from allen.validate import transitivity_check
 from llm import callLLM
+from agreement import compute_agreement
 
 
 SYSTEM_PROMPT = """You extract temporal EVENTS from a narrative.
@@ -1833,3 +1838,424 @@ async def llm_label_and_timeline(body: LLMLabelAndTimelineRequest, request: Requ
                 timeline_updated=timeline_updated,
                 timeline_skipped=timeline_skipped
             ).model_dump()
+
+
+# ---------------------------------------------------------------------------
+# Group annotation workflow (inter-annotator agreement)
+# See context/cohen_kappa.md for the design rationale.
+# ---------------------------------------------------------------------------
+
+@app.get("/users")
+async def list_users(request: Request, user=Depends(get_current_user)):
+    pool = await get_pool()
+    rows = await pool.fetch("SELECT id, username, email FROM users ORDER BY username")
+    return [UserBriefOut(**dict(r)).model_dump() for r in rows]
+
+
+async def _get_group_member(pool, task_id: int, user_id: int) -> Optional[dict]:
+    row = await pool.fetchrow(
+        "SELECT * FROM group_annotation_members WHERE task_id=$1 AND user_id=$2",
+        task_id, user_id
+    )
+    return dict(row) if row else None
+
+
+async def _require_group_access(pool, task_id: int, user_id: int) -> None:
+    row = await pool.fetchrow(
+        """SELECT gt.id FROM group_annotation_tasks gt
+           LEFT JOIN group_annotation_members gm ON gm.task_id = gt.id AND gm.user_id = $2
+           WHERE gt.id = $1 AND (gt.created_by = $2 OR gm.id IS NOT NULL)""",
+        task_id, user_id
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="Group task not found")
+
+
+async def _group_members_out(pool, task_id: int) -> list:
+    rows = await pool.fetch(
+        """SELECT gm.*, u.username FROM group_annotation_members gm
+           JOIN users u ON u.id = gm.user_id
+           WHERE gm.task_id = $1 ORDER BY gm.role, gm.annotator_index NULLS FIRST""",
+        task_id
+    )
+    return [GroupMemberOut(**dict(m)).model_dump() for m in rows]
+
+
+async def _get_group_task_detail(pool, task_id: int) -> dict:
+    task = await pool.fetchrow(
+        "SELECT gt.*, s.text AS stem_text FROM group_annotation_tasks gt JOIN stems s ON s.id = gt.stem_id WHERE gt.id = $1",
+        task_id
+    )
+    if not task:
+        raise HTTPException(status_code=404, detail="Group task not found")
+    members = await _group_members_out(pool, task_id)
+    agreement_details = json.loads(task["agreement_details"]) if task["agreement_details"] else None
+    return GroupTaskDetailOut(
+        id=task["id"], stem_id=task["stem_id"], stem_text=task["stem_text"],
+        status=task["status"], created_by=task["created_by"],
+        created_at=task["created_at"], updated_at=task["updated_at"],
+        acceptance_threshold=task["acceptance_threshold"],
+        members=members,
+        krippendorff_alpha=task["krippendorff_alpha"],
+        cohens_kappa_avg=task["cohens_kappa_avg"],
+        fleiss_kappa=task["fleiss_kappa"],
+        agreement_details=agreement_details,
+    ).model_dump()
+
+
+async def _finalize_group_agreement(pool, task_id: int) -> None:
+    task = await pool.fetchrow("SELECT * FROM group_annotation_tasks WHERE id=$1", task_id)
+    members = await pool.fetch(
+        "SELECT * FROM group_annotation_members WHERE task_id=$1 AND role='timeline_annotator'",
+        task_id
+    )
+    positions: dict = {}
+    matrices: dict = {}
+    for m in members:
+        rows = await pool.fetch("SELECT * FROM timeline_annotations WHERE member_id=$1", m["id"])
+        positions[m["id"]] = {r["span_id"]: (r["tl_start"], r["tl_end"]) for r in rows}
+        mat_row = await pool.fetchrow("SELECT * FROM timeline_relation_matrices WHERE member_id=$1", m["id"])
+        if mat_row:
+            matrices[m["id"]] = json.loads(mat_row["matrix_json"])
+
+    result = compute_agreement(positions, matrices, threshold=task["acceptance_threshold"])
+    await pool.execute(
+        """UPDATE group_annotation_tasks
+           SET krippendorff_alpha=$1, cohens_kappa_avg=$2, fleiss_kappa=$3,
+               agreement_details=$4, status=$5, updated_at=now()
+           WHERE id=$6""",
+        result["krippendorff_alpha"], result["cohens_kappa_avg"], result["fleiss_kappa"],
+        json.dumps(result["agreement_details"]), result["status"], task_id
+    )
+
+
+@app.post("/group-tasks", status_code=201)
+async def create_group_task(body: GroupTaskCreate, request: Request, user=Depends(get_current_user)):
+    validate_csrf(request)
+    pool = await get_pool()
+    stem = await pool.fetchrow("SELECT * FROM stems WHERE id=$1", body.stem_id)
+    if not stem:
+        raise HTTPException(status_code=404, detail="Stem not found")
+
+    all_user_ids = [body.event_user_id] + body.timeline_user_ids
+    if len(set(all_user_ids)) != len(all_user_ids):
+        raise HTTPException(status_code=400, detail="Event annotator and timeline annotators must be distinct users")
+    found = await pool.fetch("SELECT id FROM users WHERE id = ANY($1::int[])", all_user_ids)
+    missing = set(all_user_ids) - {r["id"] for r in found}
+    if missing:
+        raise HTTPException(status_code=400, detail=f"Unknown user id(s): {sorted(missing)}")
+
+    existing = await pool.fetchrow("SELECT id FROM group_annotation_tasks WHERE stem_id=$1", body.stem_id)
+    if existing:
+        raise HTTPException(status_code=409, detail="A group annotation task already exists for this stem")
+
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            task = await conn.fetchrow(
+                "INSERT INTO group_annotation_tasks (stem_id, created_by) VALUES ($1,$2) RETURNING *",
+                body.stem_id, user["id"]
+            )
+            await conn.execute(
+                "INSERT INTO group_annotation_members (task_id, user_id, role) VALUES ($1,$2,'event_annotator')",
+                task["id"], body.event_user_id
+            )
+            for idx, uid in enumerate(body.timeline_user_ids, start=1):
+                await conn.execute(
+                    """INSERT INTO group_annotation_members (task_id, user_id, role, annotator_index)
+                       VALUES ($1,$2,'timeline_annotator',$3)""",
+                    task["id"], uid, idx
+                )
+    return await _get_group_task_detail(pool, task["id"])
+
+
+@app.get("/group-tasks")
+async def list_group_tasks(request: Request, user=Depends(get_current_user)):
+    pool = await get_pool()
+    rows = await pool.fetch(
+        """SELECT DISTINCT gt.*, s.text AS stem_text FROM group_annotation_tasks gt
+           JOIN stems s ON s.id = gt.stem_id
+           LEFT JOIN group_annotation_members gm ON gm.task_id = gt.id
+           WHERE gt.created_by = $1 OR gm.user_id = $1
+           ORDER BY gt.created_at DESC""",
+        user["id"]
+    )
+    results = []
+    for row in rows:
+        members = await _group_members_out(pool, row["id"])
+        results.append(GroupTaskOut(
+            id=row["id"], stem_id=row["stem_id"], stem_text=row["stem_text"],
+            status=row["status"], created_by=row["created_by"],
+            created_at=row["created_at"], updated_at=row["updated_at"],
+            acceptance_threshold=row["acceptance_threshold"], members=members
+        ).model_dump())
+    return results
+
+
+@app.get("/group-tasks/dashboard")
+async def group_tasks_dashboard(request: Request, user=Depends(get_current_user)):
+    pool = await get_pool()
+    status_rows = await pool.fetch(
+        """SELECT gt.status, COUNT(DISTINCT gt.id) AS n FROM group_annotation_tasks gt
+           LEFT JOIN group_annotation_members gm ON gm.task_id = gt.id
+           WHERE gt.created_by = $1 OR gm.user_id = $1
+           GROUP BY gt.status""",
+        user["id"]
+    )
+    by_status = {r["status"]: r["n"] for r in status_rows}
+    scored = await pool.fetch(
+        """SELECT DISTINCT gt.id, gt.krippendorff_alpha FROM group_annotation_tasks gt
+           LEFT JOIN group_annotation_members gm ON gm.task_id = gt.id
+           WHERE (gt.created_by = $1 OR gm.user_id = $1) AND gt.krippendorff_alpha IS NOT NULL""",
+        user["id"]
+    )
+    alphas = [s["krippendorff_alpha"] for s in scored]
+    avg_alpha = sum(alphas) / len(alphas) if alphas else None
+    return {"by_status": by_status, "completed_with_scores": len(alphas), "avg_krippendorff_alpha": avg_alpha}
+
+
+@app.get("/group-tasks/{task_id}")
+async def get_group_task(task_id: int, request: Request, user=Depends(get_current_user)):
+    pool = await get_pool()
+    await _require_group_access(pool, task_id, user["id"])
+    return await _get_group_task_detail(pool, task_id)
+
+
+@app.get("/group-tasks/{task_id}/events")
+async def list_group_events(task_id: int, request: Request, user=Depends(get_current_user)):
+    pool = await get_pool()
+    await _require_group_access(pool, task_id, user["id"])
+    spans = await pool.fetch("SELECT * FROM spans WHERE group_task_id = $1 ORDER BY created_at", task_id)
+    return [
+        GroupEventSpanOut(
+            id=s["id"], group_task_id=task_id, label_type=s["label_type"],
+            seq_label=s["seq_label"], span_text=s["span_text"],
+            char_start=s["char_start"], char_end=s["char_end"], created_at=s["created_at"]
+        ).model_dump()
+        for s in spans
+    ]
+
+
+@app.post("/group-tasks/{task_id}/events", status_code=201)
+async def create_group_event(task_id: int, body: GroupEventSpanCreate, request: Request, user=Depends(get_current_user)):
+    validate_csrf(request)
+    pool = await get_pool()
+    task = await pool.fetchrow("SELECT * FROM group_annotation_tasks WHERE id=$1", task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Group task not found")
+    member = await _get_group_member(pool, task_id, user["id"])
+    if not member or member["role"] != "event_annotator":
+        raise HTTPException(status_code=403, detail="Only the event annotator can add events")
+    if task["status"] != "event_pending":
+        raise HTTPException(status_code=409, detail="Events are locked for this task")
+
+    existing_count = await pool.fetchval("SELECT COUNT(*) FROM spans WHERE group_task_id = $1", task_id)
+    seq_label = f"E{existing_count + 1}"
+    row = await pool.fetchrow(
+        """INSERT INTO spans (group_task_id, label_type, seq_label, span_text, char_start, char_end, tl_start, tl_end, source)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'manual') RETURNING *""",
+        task_id, "Event", seq_label, body.span_text, body.char_start, body.char_end, 10.0, 30.0
+    )
+    if member["status"] == "pending":
+        await pool.execute(
+            "UPDATE group_annotation_members SET status='in_progress', started_at=now() WHERE id=$1",
+            member["id"]
+        )
+    return GroupEventSpanOut(
+        id=row["id"], group_task_id=task_id, label_type=row["label_type"],
+        seq_label=row["seq_label"], span_text=row["span_text"],
+        char_start=row["char_start"], char_end=row["char_end"], created_at=row["created_at"]
+    ).model_dump()
+
+
+@app.delete("/group-tasks/{task_id}/events/{span_id}", status_code=204)
+async def delete_group_event(task_id: int, span_id: int, request: Request, user=Depends(get_current_user)):
+    validate_csrf(request)
+    pool = await get_pool()
+    task = await pool.fetchrow("SELECT * FROM group_annotation_tasks WHERE id=$1", task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Group task not found")
+    member = await _get_group_member(pool, task_id, user["id"])
+    if not member or member["role"] != "event_annotator":
+        raise HTTPException(status_code=403, detail="Only the event annotator can delete events")
+    if task["status"] != "event_pending":
+        raise HTTPException(status_code=409, detail="Events are locked for this task")
+    span = await pool.fetchrow("SELECT * FROM spans WHERE id=$1 AND group_task_id=$2", span_id, task_id)
+    if not span:
+        raise HTTPException(status_code=404, detail="Span not found")
+    await pool.execute("DELETE FROM spans WHERE id = $1", span_id)
+    return None
+
+
+@app.post("/group-tasks/{task_id}/submit-events")
+async def submit_group_events(task_id: int, request: Request, user=Depends(get_current_user)):
+    validate_csrf(request)
+    pool = await get_pool()
+    task = await pool.fetchrow("SELECT * FROM group_annotation_tasks WHERE id=$1", task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Group task not found")
+    member = await _get_group_member(pool, task_id, user["id"])
+    if not member or member["role"] != "event_annotator":
+        raise HTTPException(status_code=403, detail="Only the event annotator can submit events")
+    if task["status"] != "event_pending":
+        raise HTTPException(status_code=409, detail="Events already submitted")
+    count = await pool.fetchval("SELECT COUNT(*) FROM spans WHERE group_task_id = $1", task_id)
+    if count < 2:
+        raise HTTPException(status_code=400, detail="At least 2 events are required before submitting")
+
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            await conn.execute(
+                "UPDATE group_annotation_members SET status='done', completed_at=now() WHERE id=$1",
+                member["id"]
+            )
+            await conn.execute(
+                "UPDATE group_annotation_tasks SET status='timelines_pending', updated_at=now() WHERE id=$1",
+                task_id
+            )
+    return await _get_group_task_detail(pool, task_id)
+
+
+@app.get("/group-tasks/{task_id}/my-timeline")
+async def get_my_timeline(task_id: int, request: Request, user=Depends(get_current_user)):
+    pool = await get_pool()
+    member = await _get_group_member(pool, task_id, user["id"])
+    if not member or member["role"] != "timeline_annotator":
+        raise HTTPException(status_code=403, detail="Not a timeline annotator on this task")
+    spans = await pool.fetch("SELECT * FROM spans WHERE group_task_id = $1 ORDER BY created_at", task_id)
+    positions = await pool.fetch("SELECT * FROM timeline_annotations WHERE member_id = $1", member["id"])
+    pos_by_span = {p["span_id"]: p for p in positions}
+    result = [
+        TimelinePositionOut(
+            span_id=s["id"], seq_label=s["seq_label"], span_text=s["span_text"],
+            tl_start=pos_by_span[s["id"]]["tl_start"] if s["id"] in pos_by_span else s["tl_start"],
+            tl_end=pos_by_span[s["id"]]["tl_end"] if s["id"] in pos_by_span else s["tl_end"],
+        ).model_dump()
+        for s in spans
+    ]
+    return {"member_status": member["status"], "positions": result}
+
+
+@app.put("/group-tasks/{task_id}/my-timeline")
+async def upsert_my_timeline(task_id: int, body: TimelineUpsertRequest, request: Request, user=Depends(get_current_user)):
+    validate_csrf(request)
+    pool = await get_pool()
+    task = await pool.fetchrow("SELECT * FROM group_annotation_tasks WHERE id=$1", task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Group task not found")
+    member = await _get_group_member(pool, task_id, user["id"])
+    if not member or member["role"] != "timeline_annotator":
+        raise HTTPException(status_code=403, detail="Not a timeline annotator on this task")
+    if task["status"] != "timelines_pending":
+        raise HTTPException(status_code=409, detail="Timeline annotation is not open for this task")
+    if member["status"] == "done":
+        raise HTTPException(status_code=409, detail="You have already submitted your timeline")
+
+    valid_span_ids = {r["id"] for r in await pool.fetch("SELECT id FROM spans WHERE group_task_id = $1", task_id)}
+    for pos in body.positions:
+        if pos.span_id not in valid_span_ids:
+            raise HTTPException(status_code=400, detail=f"Span {pos.span_id} does not belong to this task")
+
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            for pos in body.positions:
+                await conn.execute(
+                    """INSERT INTO timeline_annotations (task_id, member_id, span_id, tl_start, tl_end)
+                       VALUES ($1,$2,$3,$4,$5)
+                       ON CONFLICT (member_id, span_id) DO UPDATE SET tl_start=$4, tl_end=$5, updated_at=now()""",
+                    task_id, member["id"], pos.span_id, pos.tl_start, pos.tl_end
+                )
+            if member["status"] == "pending" and body.positions:
+                await conn.execute(
+                    "UPDATE group_annotation_members SET status='in_progress', started_at=now() WHERE id=$1",
+                    member["id"]
+                )
+    return {"ok": True}
+
+
+@app.post("/group-tasks/{task_id}/submit-timeline")
+async def submit_timeline(task_id: int, request: Request, user=Depends(get_current_user)):
+    validate_csrf(request)
+    pool = await get_pool()
+    task = await pool.fetchrow("SELECT * FROM group_annotation_tasks WHERE id=$1", task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Group task not found")
+    member = await _get_group_member(pool, task_id, user["id"])
+    if not member or member["role"] != "timeline_annotator":
+        raise HTTPException(status_code=403, detail="Not a timeline annotator on this task")
+    if task["status"] != "timelines_pending":
+        raise HTTPException(status_code=409, detail="Timeline annotation is not open for this task")
+    if member["status"] == "done":
+        raise HTTPException(status_code=409, detail="Already submitted")
+
+    spans = await pool.fetch("SELECT * FROM spans WHERE group_task_id = $1 ORDER BY created_at", task_id)
+    positions = await pool.fetch("SELECT * FROM timeline_annotations WHERE member_id = $1", member["id"])
+    pos_by_span = {p["span_id"]: p for p in positions}
+    missing = [s["seq_label"] for s in spans if s["id"] not in pos_by_span]
+    if missing:
+        raise HTTPException(status_code=400, detail=f"Missing timeline positions for: {', '.join(missing)}")
+
+    span_list = [
+        {"id": s["id"], "tl_start": pos_by_span[s["id"]]["tl_start"], "tl_end": pos_by_span[s["id"]]["tl_end"]}
+        for s in spans
+    ]
+    matrix = build_matrix(span_list)
+    span_order = [{"id": s["id"], "seq_label": s["seq_label"]} for s in spans]
+
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            await conn.execute(
+                """INSERT INTO timeline_relation_matrices (task_id, member_id, matrix_json, span_order)
+                   VALUES ($1,$2,$3,$4)
+                   ON CONFLICT (task_id, member_id) DO UPDATE SET matrix_json=$3, span_order=$4""",
+                task_id, member["id"], json.dumps(matrix), json.dumps(span_order)
+            )
+            await conn.execute(
+                "UPDATE group_annotation_members SET status='done', completed_at=now() WHERE id=$1",
+                member["id"]
+            )
+
+    remaining = await pool.fetch(
+        "SELECT status FROM group_annotation_members WHERE task_id=$1 AND role='timeline_annotator'",
+        task_id
+    )
+    if all(m["status"] == "done" for m in remaining):
+        await _finalize_group_agreement(pool, task_id)
+
+    return await _get_group_task_detail(pool, task_id)
+
+
+@app.get("/group-tasks/{task_id}/agreement")
+async def get_group_agreement(task_id: int, request: Request, user=Depends(get_current_user)):
+    pool = await get_pool()
+    await _require_group_access(pool, task_id, user["id"])
+    task = await pool.fetchrow("SELECT * FROM group_annotation_tasks WHERE id=$1", task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Group task not found")
+    details = json.loads(task["agreement_details"]) if task["agreement_details"] else None
+    return GroupAgreementOut(
+        task_id=task_id, status=task["status"],
+        krippendorff_alpha=task["krippendorff_alpha"],
+        cohens_kappa_avg=task["cohens_kappa_avg"],
+        fleiss_kappa=task["fleiss_kappa"],
+        acceptance_threshold=task["acceptance_threshold"],
+        agreement_details=details,
+    ).model_dump()
+
+
+@app.post("/group-tasks/{task_id}/accept")
+async def decide_group_task(task_id: int, body: GroupTaskDecision, request: Request, user=Depends(get_current_user)):
+    validate_csrf(request)
+    pool = await get_pool()
+    task = await pool.fetchrow("SELECT * FROM group_annotation_tasks WHERE id=$1", task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Group task not found")
+    if task["created_by"] != user["id"]:
+        raise HTTPException(status_code=403, detail="Only the task creator can finalize a decision")
+    valid_decisions = {"accepted", "accepted_flagged", "adjudication", "rejected"}
+    if body.decision not in valid_decisions:
+        raise HTTPException(status_code=400, detail=f"Decision must be one of {sorted(valid_decisions)}")
+    await pool.execute(
+        "UPDATE group_annotation_tasks SET status=$1, updated_at=now() WHERE id=$2",
+        body.decision, task_id
+    )
+    return await _get_group_task_detail(pool, task_id)
