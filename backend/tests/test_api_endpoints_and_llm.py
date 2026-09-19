@@ -266,7 +266,10 @@ async def run_all_tests():
 
         # Test /api/llm-label-and-timeline on a fresh batch stem
         print("\n   Testing /api/llm-label-and-timeline...")
-        llm_stem_text = "At dawn the rocket launched into orbit. Ten minutes later, the booster separated safely."
+        # Unique per run: /stems/import dedupes by exact text, so a fixed
+        # string would silently resolve to a stem from a previous run that
+        # may still hold an active (unexpired) batch lock.
+        llm_stem_text = f"At dawn the rocket launched into orbit. Ten minutes later, the booster separated safely. (run {ts})"
         llm_import = await client.post("/stems/import", headers=auth_headers, json={"texts": [llm_stem_text]})
         assert llm_import.status_code == 200
         llm_stem_id = await conn.fetchval("SELECT id FROM stems WHERE text=$1", llm_stem_text)

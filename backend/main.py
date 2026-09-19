@@ -1864,6 +1864,21 @@ async def _get_group_member(pool, task_id: int, user_id: int) -> Optional[dict]:
     return dict(row) if row else None
 
 
+async def _get_task_and_member_role(pool, task_id: int, user_id: int) -> Optional[dict]:
+    """One round trip in place of a separate task fetch + member fetch.
+    {task_status, task_decision, member_id, member_role, member_status} —
+    the member_* fields are None if the caller isn't a member of this task."""
+    row = await pool.fetchrow(
+        """SELECT gt.status AS task_status, gt.decision AS task_decision,
+                  gm.id AS member_id, gm.role AS member_role, gm.status AS member_status
+           FROM group_annotation_tasks gt
+           LEFT JOIN group_annotation_members gm ON gm.task_id = gt.id AND gm.user_id = $2
+           WHERE gt.id = $1""",
+        task_id, user_id
+    )
+    return dict(row) if row else None
+
+
 async def _group_members_out(pool, task_id: int) -> list:
     rows = await pool.fetch(
         """SELECT gm.*, u.username FROM group_annotation_members gm
@@ -1967,22 +1982,35 @@ async def _member_matrix(pool, member_id: int, spans: list) -> dict:
 
 
 async def _save_member_relations(pool, task_id: int, member_id: int, spans: list, matrix: list) -> None:
-    """Upserts the derived relation for every non-overridden cell. Cells the
-    annotator has overridden are left untouched, so re-deriving from fresh
-    positions never clobbers an override."""
+    """Upserts the derived relation for every non-overridden cell, in one
+    round trip regardless of how many events there are (a Python loop of
+    individual awaits here was N*(N-1) round trips per save/submit — the
+    dominant cost on every timeline action). Cells the annotator has
+    overridden are left untouched, so re-deriving from fresh positions never
+    clobbers an override."""
     n = len(spans)
+    if n < 2:
+        return
+    task_ids, member_ids, span_i_ids, span_j_ids, codes = [], [], [], [], []
     for i in range(n):
         for j in range(n):
             if i == j:
                 continue
-            await pool.execute(
-                """INSERT INTO timeline_relations (task_id, member_id, span_i_id, span_j_id, relation_code, is_override)
-                   VALUES ($1,$2,$3,$4,$5,FALSE)
-                   ON CONFLICT (member_id, span_i_id, span_j_id)
-                   DO UPDATE SET relation_code=$5, updated_at=now()
-                   WHERE timeline_relations.is_override = FALSE""",
-                task_id, member_id, spans[i]["id"], spans[j]["id"], matrix[i][j]
-            )
+            task_ids.append(task_id)
+            member_ids.append(member_id)
+            span_i_ids.append(spans[i]["id"])
+            span_j_ids.append(spans[j]["id"])
+            codes.append(matrix[i][j])
+
+    await pool.execute(
+        """INSERT INTO timeline_relations (task_id, member_id, span_i_id, span_j_id, relation_code, is_override)
+           SELECT t, m, si, sj, code, FALSE
+           FROM unnest($1::int[], $2::int[], $3::int[], $4::int[], $5::int[]) AS u(t, m, si, sj, code)
+           ON CONFLICT (member_id, span_i_id, span_j_id)
+           DO UPDATE SET relation_code = EXCLUDED.relation_code, updated_at = now()
+           WHERE timeline_relations.is_override = FALSE""",
+        task_ids, member_ids, span_i_ids, span_j_ids, codes
+    )
 
 
 async def _invalidate_timelines_for_span_change(pool, task_id: int) -> None:
@@ -2358,28 +2386,37 @@ async def create_group_event(task_id: int, body: GroupEventSpanCreate, request: 
     invalidates all three timeline submissions (new event, no positions yet)."""
     validate_csrf(request)
     pool = await get_pool()
-    task = await pool.fetchrow("SELECT * FROM group_annotation_tasks WHERE id=$1", task_id)
-    if not task:
+    task_and_member = await pool.fetchrow(
+        """SELECT gt.status AS task_status, gt.decision,
+                  gm.id AS member_id, gm.role AS member_role, gm.status AS member_status
+           FROM group_annotation_tasks gt
+           LEFT JOIN group_annotation_members gm ON gm.task_id = gt.id AND gm.user_id = $2
+           WHERE gt.id = $1""",
+        task_id, user["id"]
+    )
+    if not task_and_member:
         raise HTTPException(status_code=404, detail="Group task not found")
-    member = await _get_group_member(pool, task_id, user["id"])
-    if not member or member["role"] != "event_annotator":
+    if task_and_member["member_role"] != "event_annotator":
         raise HTTPException(status_code=403, detail="Only the event annotator can add events")
-    if task["decision"] is not None:
+    if task_and_member["decision"] is not None:
         raise HTTPException(status_code=409, detail="Task decision is finalized; ask a non-participant to reopen it")
+    member = {"id": task_and_member["member_id"], "status": task_and_member["member_status"]}
 
-    existing_count = await pool.fetchval("SELECT COUNT(*) FROM spans WHERE group_task_id = $1", task_id)
-    seq_label = f"E{existing_count + 1}"
+    # Count-then-insert combined into one round trip.
     row = await pool.fetchrow(
         """INSERT INTO spans (group_task_id, label_type, seq_label, span_text, char_start, char_end, tl_start, tl_end, source)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'manual') RETURNING *""",
-        task_id, "Event", seq_label, body.span_text, body.char_start, body.char_end, 10.0, 30.0
+           SELECT $1, 'Event', 'E' || (COALESCE((SELECT COUNT(*) FROM spans WHERE group_task_id = $1), 0) + 1)::text,
+                  $2, $3, $4, 10.0, 30.0, 'manual'
+           RETURNING *""",
+        task_id, body.span_text, body.char_start, body.char_end
     )
+
     if member["status"] in ("pending", "submitted"):
         await pool.execute(
             "UPDATE group_annotation_members SET status='in_progress', started_at=COALESCE(started_at, now()) WHERE id=$1",
             member["id"]
         )
-    if task["status"] != "event_pending":
+    if task_and_member["task_status"] != "event_pending":
         await _invalidate_timelines_for_span_change(pool, task_id)
 
     return GroupEventSpanOut(
@@ -2475,16 +2512,16 @@ async def upsert_my_timeline(task_id: int, body: TimelineUpsertRequest, request:
     rejecting the write."""
     validate_csrf(request)
     pool = await get_pool()
-    task = await pool.fetchrow("SELECT * FROM group_annotation_tasks WHERE id=$1", task_id)
-    if not task:
+    info = await _get_task_and_member_role(pool, task_id, user["id"])
+    if not info:
         raise HTTPException(status_code=404, detail="Group task not found")
-    member = await _get_group_member(pool, task_id, user["id"])
-    if not member or member["role"] != "timeline_annotator":
+    if info["member_role"] != "timeline_annotator":
         raise HTTPException(status_code=403, detail="Not a timeline annotator on this task")
-    if task["status"] not in ("timelines_pending", "computed"):
+    if info["task_status"] not in ("timelines_pending", "computed"):
         raise HTTPException(status_code=409, detail="Timeline annotation is not open for this task")
-    if task["decision"] is not None:
+    if info["task_decision"] is not None:
         raise HTTPException(status_code=409, detail="Task decision is finalized; ask a non-participant to reopen it")
+    member = {"id": info["member_id"], "status": info["member_status"]}
 
     valid_span_ids = {r["id"] for r in await pool.fetch("SELECT id FROM spans WHERE group_task_id = $1", task_id)}
     for pos in body.positions:
@@ -2494,12 +2531,23 @@ async def upsert_my_timeline(task_id: int, body: TimelineUpsertRequest, request:
     was_submitted = member["status"] == "submitted"
     async with pool.acquire() as conn:
         async with conn.transaction():
-            for pos in body.positions:
+            if body.positions:
+                # One round trip for every position in the batch, instead of
+                # one insert per position — the frontend sends all of them
+                # at once right before submitting.
+                task_ids = [task_id] * len(body.positions)
+                member_ids = [member["id"]] * len(body.positions)
+                span_ids = [p.span_id for p in body.positions]
+                tl_starts = [p.tl_start for p in body.positions]
+                tl_ends = [p.tl_end for p in body.positions]
+                sources = [p.source for p in body.positions]
                 await conn.execute(
                     """INSERT INTO timeline_annotations (task_id, member_id, span_id, tl_start, tl_end, source)
-                       VALUES ($1,$2,$3,$4,$5,$6)
-                       ON CONFLICT (member_id, span_id) DO UPDATE SET tl_start=$4, tl_end=$5, source=$6, updated_at=now()""",
-                    task_id, member["id"], pos.span_id, pos.tl_start, pos.tl_end, pos.source
+                       SELECT * FROM unnest($1::int[], $2::int[], $3::int[], $4::float[], $5::float[], $6::text[])
+                       ON CONFLICT (member_id, span_id)
+                       DO UPDATE SET tl_start = EXCLUDED.tl_start, tl_end = EXCLUDED.tl_end,
+                                     source = EXCLUDED.source, updated_at = now()""",
+                    task_ids, member_ids, span_ids, tl_starts, tl_ends, sources
                 )
             if member["status"] in ("pending", "submitted") and body.positions:
                 await conn.execute(
@@ -2687,37 +2735,51 @@ async def override_my_matrix(task_id: int, body: MatrixOverride, request: Reques
 async def submit_timeline(task_id: int, request: Request, user=Depends(get_current_user)):
     validate_csrf(request)
     pool = await get_pool()
-    task = await pool.fetchrow("SELECT * FROM group_annotation_tasks WHERE id=$1", task_id)
-    if not task:
+    info = await _get_task_and_member_role(pool, task_id, user["id"])
+    if not info:
         raise HTTPException(status_code=404, detail="Group task not found")
-    member = await _get_group_member(pool, task_id, user["id"])
-    if not member or member["role"] != "timeline_annotator":
+    if info["member_role"] != "timeline_annotator":
         raise HTTPException(status_code=403, detail="Not a timeline annotator on this task")
-    if task["status"] not in ("timelines_pending", "computed"):
+    if info["task_status"] not in ("timelines_pending", "computed"):
         raise HTTPException(status_code=409, detail="Timeline annotation is not open for this task")
-    if task["decision"] is not None:
+    if info["task_decision"] is not None:
         raise HTTPException(status_code=409, detail="Task decision is finalized; ask a non-participant to reopen it")
+    member_id = info["member_id"]
 
-    spans = await pool.fetch("SELECT * FROM spans WHERE group_task_id = $1 ORDER BY created_at", task_id)
-    positions = await pool.fetch("SELECT * FROM timeline_annotations WHERE member_id = $1", member["id"])
-    pos_by_span = {p["span_id"]: p for p in positions}
-    missing = [s["seq_label"] for s in spans if s["id"] not in pos_by_span]
+    # Spans + this member's positions in one round trip (was two), so the
+    # matrix can be built without a second fetch later.
+    rows = await pool.fetch(
+        """SELECT s.id, s.seq_label, ta.tl_start, ta.tl_end, ta.source
+           FROM spans s
+           LEFT JOIN timeline_annotations ta ON ta.span_id = s.id AND ta.member_id = $2
+           WHERE s.group_task_id = $1
+           ORDER BY s.created_at""",
+        task_id, member_id
+    )
+    missing = [r["seq_label"] for r in rows if r["tl_start"] is None]
     if missing:
         raise HTTPException(status_code=400, detail=f"Missing timeline positions for: {', '.join(missing)}")
 
-    span_list = [
-        {"id": s["id"], "tl_start": pos_by_span[s["id"]]["tl_start"], "tl_end": pos_by_span[s["id"]]["tl_end"]}
-        for s in spans
-    ]
+    span_list = [{"id": r["id"], "tl_start": r["tl_start"], "tl_end": r["tl_end"]} for r in rows]
     derived_matrix = build_matrix(span_list)
-    await _save_member_relations(pool, task_id, member["id"], spans, derived_matrix)
-    final = await _member_matrix(pool, member["id"], spans)
-    matrix, span_order = final["matrix"], final["span_order"]
-    had_llm_assist = any(p["source"] == "llm" for p in positions)
-    positions_json = [
-        {"span_id": sid, "tl_start": p["tl_start"], "tl_end": p["tl_end"]}
-        for sid, p in pos_by_span.items()
-    ]
+    await _save_member_relations(pool, task_id, member_id, rows, derived_matrix)
+
+    # Apply any prior overrides to the just-derived matrix in Python — one
+    # query for the overrides, instead of re-fetching positions we already
+    # have (that's what _member_matrix would otherwise do here).
+    matrix = [row[:] for row in derived_matrix]
+    id_index = {r["id"]: idx for idx, r in enumerate(rows)}
+    overrides = await pool.fetch(
+        "SELECT * FROM timeline_relations WHERE member_id=$1 AND is_override=TRUE", member_id
+    )
+    for o in overrides:
+        i, j = id_index.get(o["span_i_id"]), id_index.get(o["span_j_id"])
+        if i is not None and j is not None:
+            matrix[i][j] = o["relation_code"]
+    span_order = [{"id": r["id"], "seq_label": r["seq_label"]} for r in rows]
+
+    had_llm_assist = any(r["source"] == "llm" for r in rows)
+    positions_json = [{"span_id": r["id"], "tl_start": r["tl_start"], "tl_end": r["tl_end"]} for r in rows]
 
     async with pool.acquire() as conn:
         async with conn.transaction():
@@ -2725,22 +2787,22 @@ async def submit_timeline(task_id: int, request: Request, user=Depends(get_curre
                 """INSERT INTO timeline_relation_matrices (task_id, member_id, matrix_json, span_order)
                    VALUES ($1,$2,$3,$4)
                    ON CONFLICT (task_id, member_id) DO UPDATE SET matrix_json=$3, span_order=$4""",
-                task_id, member["id"], json.dumps(matrix), json.dumps(span_order)
+                task_id, member_id, json.dumps(matrix), json.dumps(span_order)
             )
-            next_rev = await conn.fetchval(
-                "SELECT COALESCE(MAX(revision_no), 0) + 1 FROM timeline_submission_revisions WHERE member_id=$1",
-                member["id"]
-            )
+            # next revision_no folded into the insert itself — one round trip
+            # instead of a separate SELECT MAX(...) beforehand.
             await conn.execute(
                 """INSERT INTO timeline_submission_revisions
                        (task_id, member_id, revision_no, positions_json, matrix_json, span_order, had_llm_assist)
-                   VALUES ($1,$2,$3,$4,$5,$6,$7)""",
-                task_id, member["id"], next_rev, json.dumps(positions_json),
+                   SELECT $1, $2,
+                          COALESCE((SELECT MAX(revision_no) FROM timeline_submission_revisions WHERE member_id = $2), 0) + 1,
+                          $3, $4, $5, $6""",
+                task_id, member_id, json.dumps(positions_json),
                 json.dumps(matrix), json.dumps(span_order), had_llm_assist
             )
             await conn.execute(
                 "UPDATE group_annotation_members SET status='submitted', completed_at=now() WHERE id=$1",
-                member["id"]
+                member_id
             )
 
     remaining = await pool.fetch(
@@ -2749,7 +2811,7 @@ async def submit_timeline(task_id: int, request: Request, user=Depends(get_curre
     )
     if all(m["status"] == "submitted" for m in remaining):
         await _finalize_group_agreement(pool, task_id)
-    elif task["status"] == "computed":
+    elif info["task_status"] == "computed":
         # A revision after a prior full completion — back to pending until all 3 resubmit.
         await pool.execute(
             "UPDATE group_annotation_tasks SET status='timelines_pending', scores_stale=TRUE, updated_at=now() WHERE id=$1",

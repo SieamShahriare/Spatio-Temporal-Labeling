@@ -78,6 +78,32 @@ async def get_session(token: str) -> Optional[dict]:
     return dict(row) if row else None
 
 
+async def get_session_and_user(token: str) -> Optional[tuple[dict, dict]]:
+    """One round trip in place of get_session() + get_user_by_id(): this runs
+    on every single authenticated request via get_current_user, so it was the
+    single largest fixed cost in the whole app — two DB round trips before
+    any endpoint logic even started."""
+    if not token:
+        return None
+    pool = await get_pool()
+    row = await pool.fetchrow(
+        """SELECT s.id AS session_id, s.user_id, s.token, s.csrf_token, s.created_at AS session_created_at, s.expires_at,
+                  u.id AS u_id, u.email, u.username, u.created_at AS u_created_at
+           FROM auth_sessions s
+           JOIN users u ON u.id = s.user_id
+           WHERE s.token = $1 AND s.expires_at > now()""",
+        token
+    )
+    if not row:
+        return None
+    session = {
+        "id": row["session_id"], "user_id": row["user_id"], "token": row["token"],
+        "csrf_token": row["csrf_token"], "created_at": row["session_created_at"], "expires_at": row["expires_at"],
+    }
+    user = {"id": row["u_id"], "email": row["email"], "username": row["username"], "created_at": row["u_created_at"]}
+    return session, user
+
+
 async def delete_session(token: str) -> None:
     pool = await get_pool()
     await pool.execute("DELETE FROM auth_sessions WHERE token = $1", token)
@@ -103,16 +129,15 @@ async def get_current_user(
     request: Request,
     token: Optional[str] = None,
 ) -> dict:
-    """Return current user dict or raise 401."""
+    """Return current user dict or raise 401. Runs on every authenticated
+    request, so the session+user lookup is one round trip, not two."""
     raw_token = token or await cookie_scheme(request)
     if not raw_token:
         raise HTTPException(status_code=401, detail="Not authenticated")
-    session = await get_session(raw_token)
-    if not session:
+    result = await get_session_and_user(raw_token)
+    if not result:
         raise HTTPException(status_code=401, detail="Session expired or invalid")
-    user = await get_user_by_id(session["user_id"])
-    if not user:
-        raise HTTPException(status_code=401, detail="User not found")
+    session, user = result
     request.state.user = user
     request.state.session = session
     return user
@@ -123,12 +148,10 @@ async def get_current_user_optional(request: Request) -> Optional[dict]:
     raw_token = await cookie_scheme(request)
     if not raw_token:
         return None
-    session = await get_session(raw_token)
-    if not session:
+    result = await get_session_and_user(raw_token)
+    if not result:
         return None
-    user = await get_user_by_id(session["user_id"])
-    if not user:
-        return None
+    session, user = result
     request.state.user = user
     request.state.session = session
     return user
