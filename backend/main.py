@@ -1864,25 +1864,6 @@ async def _get_group_member(pool, task_id: int, user_id: int) -> Optional[dict]:
     return dict(row) if row else None
 
 
-async def _is_group_member(pool, task_id: int, user_id: int) -> bool:
-    row = await pool.fetchrow(
-        "SELECT 1 FROM group_annotation_members WHERE task_id=$1 AND user_id=$2",
-        task_id, user_id
-    )
-    return row is not None
-
-
-async def _require_group_access(pool, task_id: int, user_id: int) -> None:
-    row = await pool.fetchrow(
-        """SELECT gt.id FROM group_annotation_tasks gt
-           LEFT JOIN group_annotation_members gm ON gm.task_id = gt.id AND gm.user_id = $2
-           WHERE gt.id = $1 AND (gt.created_by = $2 OR gm.id IS NOT NULL)""",
-        task_id, user_id
-    )
-    if not row:
-        raise HTTPException(status_code=404, detail="Group task not found")
-
-
 async def _group_members_out(pool, task_id: int) -> list:
     rows = await pool.fetch(
         """SELECT gm.*, u.username FROM group_annotation_members gm
@@ -1893,9 +1874,35 @@ async def _group_members_out(pool, task_id: int) -> list:
     return [GroupMemberOut(**dict(m)).model_dump() for m in rows]
 
 
+async def _get_access_and_membership(pool, task_id: int, user_id: int) -> Optional[dict]:
+    """One round trip in place of a separate access-check query plus a
+    separate membership query: {is_creator, is_member}, or None if the task
+    doesn't exist at all."""
+    row = await pool.fetchrow(
+        """SELECT (gt.created_by = $2) AS is_creator, (gm.id IS NOT NULL) AS is_member
+           FROM group_annotation_tasks gt
+           LEFT JOIN group_annotation_members gm ON gm.task_id = gt.id AND gm.user_id = $2
+           WHERE gt.id = $1
+           LIMIT 1""",
+        task_id, user_id
+    )
+    return dict(row) if row else None
+
+
+async def _require_group_access(pool, task_id: int, user_id: int) -> dict:
+    """Raises 404 unless the caller is the creator or a member. Returns the
+    membership row so callers needing `is_member` too don't issue a second query."""
+    access = await _get_access_and_membership(pool, task_id, user_id)
+    if not access or not (access["is_creator"] or access["is_member"]):
+        raise HTTPException(status_code=404, detail="Group task not found")
+    return access
+
+
 async def _get_group_task_detail(pool, task_id: int, viewer_user_id: Optional[int] = None) -> dict:
     """Builds the full task detail. Per D7, a viewer who is a member of this task
-    never sees its agreement scores, outcome or decision — only workflow status."""
+    never sees its agreement scores, outcome or decision — only workflow status.
+    Membership is derived from the members list already being fetched here,
+    rather than a separate query."""
     task = await pool.fetchrow(
         "SELECT gt.*, s.text AS stem_text FROM group_annotation_tasks gt JOIN stems s ON s.id = gt.stem_id WHERE gt.id = $1",
         task_id
@@ -1905,7 +1912,7 @@ async def _get_group_task_detail(pool, task_id: int, viewer_user_id: Optional[in
     members = await _group_members_out(pool, task_id)
     agreement_details = json.loads(task["agreement_details"]) if task["agreement_details"] else None
 
-    hide_scores = viewer_user_id is not None and await _is_group_member(pool, task_id, viewer_user_id)
+    hide_scores = viewer_user_id is not None and any(m["user_id"] == viewer_user_id for m in members)
 
     return GroupTaskDetailOut(
         id=task["id"], stem_id=task["stem_id"], stem_text=task["stem_text"],
@@ -2108,13 +2115,15 @@ async def distribute_group_tasks(body: DistributeRequest, request: Request, user
 
     skipped: list = []
     to_create: list = []
+    seen_stem_ids: set = set()
     for sid in body.stem_ids:
         if sid not in found_stem_ids:
             skipped.append({"stem_id": sid, "reason": "Stem not found"})
-        elif sid in already_taken:
+        elif sid in already_taken or sid in seen_stem_ids:
             skipped.append({"stem_id": sid, "reason": "A group task already exists for this stem"})
         else:
             to_create.append(sid)
+            seen_stem_ids.add(sid)
 
     load_rows = await pool.fetch(
         """SELECT user_id, COUNT(*) AS n FROM group_annotation_members
@@ -2129,6 +2138,17 @@ async def distribute_group_tasks(body: DistributeRequest, request: Request, user
         least_idx = min(range(n), key=lambda idx: load.get(ring[idx], 0))
         ring = ring[least_idx:] + ring[:least_idx]
 
+    # Compute every role assignment in Python first — no DB round trips here —
+    # so the actual writes below can be two batched statements instead of
+    # ~5 round trips per stem.
+    assignments: list = []
+    for i, stem_id in enumerate(to_create):
+        if i > 0 and i % n == 0:
+            random.shuffle(ring)
+        event_uid = ring[i % n]
+        timeline_uids = [ring[(i + k) % n] for k in (1, 2, 3)]
+        assignments.append((stem_id, event_uid, timeline_uids))
+
     created_task_ids: list = []
     async with pool.acquire() as conn:
         async with conn.transaction():
@@ -2138,29 +2158,34 @@ async def distribute_group_tasks(body: DistributeRequest, request: Request, user
             )
             run_id = run_row["id"]
 
-            for i, stem_id in enumerate(to_create):
-                if i > 0 and i % n == 0:
-                    random.shuffle(ring)
-                event_uid = ring[i % n]
-                timeline_uids = [ring[(i + k) % n] for k in (1, 2, 3)]
-
-                task = await conn.fetchrow(
+            if assignments:
+                # One round trip for every task row, via unnest over the stem list.
+                stem_ids_ordered = [a[0] for a in assignments]
+                task_rows = await conn.fetch(
                     """INSERT INTO group_annotation_tasks (stem_id, created_by, distribution_run_id)
-                       VALUES ($1,$2,$3) RETURNING id""",
-                    stem_id, user["id"], run_id
+                       SELECT unnest($1::int[]), $2, $3
+                       RETURNING id, stem_id""",
+                    stem_ids_ordered, user["id"], run_id
                 )
+                task_id_by_stem = {r["stem_id"]: r["id"] for r in task_rows}
+                created_task_ids = [task_id_by_stem[sid] for sid in stem_ids_ordered]
+
+                # One more round trip for every member row across every task,
+                # via unnest over five parallel columns.
+                m_task_ids, m_user_ids, m_roles, m_indices, m_assigned_by = [], [], [], [], []
+                for stem_id, event_uid, timeline_uids in assignments:
+                    tid = task_id_by_stem[stem_id]
+                    m_task_ids.append(tid); m_user_ids.append(event_uid)
+                    m_roles.append('event_annotator'); m_indices.append(None); m_assigned_by.append(user["id"])
+                    for idx, uid in enumerate(timeline_uids, start=1):
+                        m_task_ids.append(tid); m_user_ids.append(uid)
+                        m_roles.append('timeline_annotator'); m_indices.append(idx); m_assigned_by.append(user["id"])
+
                 await conn.execute(
-                    """INSERT INTO group_annotation_members (task_id, user_id, role, assigned_by)
-                       VALUES ($1,$2,'event_annotator',$3)""",
-                    task["id"], event_uid, user["id"]
+                    """INSERT INTO group_annotation_members (task_id, user_id, role, annotator_index, assigned_by)
+                       SELECT * FROM unnest($1::int[], $2::int[], $3::text[], $4::int[], $5::int[])""",
+                    m_task_ids, m_user_ids, m_roles, m_indices, m_assigned_by
                 )
-                for idx, uid in enumerate(timeline_uids, start=1):
-                    await conn.execute(
-                        """INSERT INTO group_annotation_members (task_id, user_id, role, annotator_index, assigned_by)
-                           VALUES ($1,$2,'timeline_annotator',$3,$4)""",
-                        task["id"], uid, idx, user["id"]
-                    )
-                created_task_ids.append(task["id"])
 
     return DistributeResponse(
         distribution_run_id=run_id,
@@ -2235,6 +2260,9 @@ async def reassign_member(task_id: int, member_id: int, body: ReassignRequest, r
 
 @app.get("/group-tasks")
 async def list_group_tasks(request: Request, user=Depends(get_current_user)):
+    """Two round trips regardless of how many tasks are returned: one for the
+    tasks, one for every member of every one of those tasks at once. Member
+    rows are grouped in Python instead of being fetched per task."""
     pool = await get_pool()
     rows = await pool.fetch(
         """SELECT DISTINCT gt.*, s.text AS stem_text FROM group_annotation_tasks gt
@@ -2244,10 +2272,23 @@ async def list_group_tasks(request: Request, user=Depends(get_current_user)):
            ORDER BY gt.created_at DESC""",
         user["id"]
     )
+    task_ids = [row["id"] for row in rows]
+    member_rows = await pool.fetch(
+        """SELECT gm.*, u.username FROM group_annotation_members gm
+           JOIN users u ON u.id = gm.user_id
+           WHERE gm.task_id = ANY($1::int[])
+           ORDER BY gm.task_id, gm.role, gm.annotator_index NULLS FIRST""",
+        task_ids
+    ) if task_ids else []
+
+    members_by_task: dict = {}
+    for m in member_rows:
+        members_by_task.setdefault(m["task_id"], []).append(GroupMemberOut(**dict(m)).model_dump())
+
     results = []
     for row in rows:
-        members = await _group_members_out(pool, row["id"])
-        hide_scores = await _is_group_member(pool, row["id"], user["id"])
+        members = members_by_task.get(row["id"], [])
+        hide_scores = any(m["user_id"] == user["id"] for m in members)
         results.append(GroupTaskOut(
             id=row["id"], stem_id=row["stem_id"], stem_text=row["stem_text"],
             status=row["status"],
@@ -2722,8 +2763,8 @@ async def submit_timeline(task_id: int, request: Request, user=Depends(get_curre
 async def get_group_agreement(task_id: int, request: Request, user=Depends(get_current_user)):
     """Per D7: members of the task cannot see its agreement scores at all."""
     pool = await get_pool()
-    await _require_group_access(pool, task_id, user["id"])
-    if await _is_group_member(pool, task_id, user["id"]):
+    access = await _require_group_access(pool, task_id, user["id"])
+    if access["is_member"]:
         raise HTTPException(status_code=403, detail="Participants cannot view their own task's agreement scores")
     task = await pool.fetchrow("SELECT * FROM group_annotation_tasks WHERE id=$1", task_id)
     if not task:
@@ -2744,8 +2785,8 @@ async def get_group_agreement(task_id: int, request: Request, user=Depends(get_c
 async def get_group_revisions(task_id: int, request: Request, user=Depends(get_current_user)):
     """Submission history, non-participants only (§10.1)."""
     pool = await get_pool()
-    await _require_group_access(pool, task_id, user["id"])
-    if await _is_group_member(pool, task_id, user["id"]):
+    access = await _require_group_access(pool, task_id, user["id"])
+    if access["is_member"]:
         raise HTTPException(status_code=403, detail="Participants cannot view their own task's revision history")
     rows = await pool.fetch(
         """SELECT r.*, gm.user_id, gm.annotator_index, u.username
@@ -2769,8 +2810,8 @@ async def get_group_revisions(task_id: int, request: Request, user=Depends(get_c
 async def get_group_agreement_runs(task_id: int, request: Request, user=Depends(get_current_user)):
     """Agreement over time, non-participants only (§10.1)."""
     pool = await get_pool()
-    await _require_group_access(pool, task_id, user["id"])
-    if await _is_group_member(pool, task_id, user["id"]):
+    access = await _require_group_access(pool, task_id, user["id"])
+    if access["is_member"]:
         raise HTTPException(status_code=403, detail="Participants cannot view their own task's agreement history")
     rows = await pool.fetch(
         "SELECT * FROM agreement_runs WHERE task_id = $1 ORDER BY run_no", task_id
@@ -2792,10 +2833,10 @@ async def decide_group_task(task_id: int, body: GroupTaskDecision, request: Requ
     admin role, no creator privilege. Passing decision=null reopens the task."""
     validate_csrf(request)
     pool = await get_pool()
-    task = await pool.fetchrow("SELECT * FROM group_annotation_tasks WHERE id=$1", task_id)
-    if not task:
+    access = await _get_access_and_membership(pool, task_id, user["id"])
+    if not access:
         raise HTTPException(status_code=404, detail="Group task not found")
-    if await _is_group_member(pool, task_id, user["id"]):
+    if access["is_member"]:
         raise HTTPException(status_code=403, detail="Participants cannot finalize a decision on their own task")
 
     if body.decision is None:
