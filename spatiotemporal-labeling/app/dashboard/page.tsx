@@ -2,8 +2,8 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { listBatches, getBatch, releaseBatch, rebookBatch, exportBatchCsv, exportBatchJson, exportBatchStemJson } from '@/lib/api';
-import { BatchOut, BatchDetailOut } from '@/lib/types';
+import { listBatches, getBatch, releaseBatch, rebookBatch, exportBatchCsv, exportBatchJson, exportBatchStemJson, listMyTasks } from '@/lib/api';
+import { BatchOut, BatchDetailOut, MyTaskOut } from '@/lib/types';
 import { useAuth } from '@/lib/AuthContext';
 
 function formatCountdown(seconds: number): string {
@@ -38,6 +38,7 @@ export default function DashboardPage() {
   const router = useRouter();
   const { user, loading: authLoading, logout } = useAuth();
   const [batches, setBatches] = useState<BatchOut[]>([]);
+  const [myTasks, setMyTasks] = useState<MyTaskOut[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [expanded, setExpanded] = useState<number | null>(null);
@@ -56,8 +57,11 @@ export default function DashboardPage() {
     let cancelled = false;
     (async () => {
       try {
-        const data = await listBatches();
-        if (!cancelled) setBatches(data);
+        const [data, tasks] = await Promise.all([listBatches(), listMyTasks()]);
+        if (!cancelled) {
+          setBatches(data);
+          setMyTasks(tasks);
+        }
       } catch (e: unknown) {
         if (!cancelled) setError(e instanceof Error ? e.message : 'Failed to load batches.');
       } finally {
@@ -199,6 +203,45 @@ export default function DashboardPage() {
         }}>
           <span>{error}</span>
           <button onClick={() => setError('')} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-disabled)', fontSize: 16 }}>×</button>
+        </div>
+      )}
+
+      {myTasks.length > 0 && (
+        <div style={{ marginBottom: 32 }}>
+          <h2 style={{ fontSize: 14, fontWeight: 700, margin: '0 0 12px' }}>
+            My Assigned Tasks ({myTasks.filter(t => !t.blocked).length} ready{myTasks.some(t => t.blocked) ? `, ${myTasks.filter(t => t.blocked).length} waiting` : ''})
+          </h2>
+          <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 10, overflow: 'hidden' }}>
+            {[...myTasks].sort((a, b) => Number(a.blocked) - Number(b.blocked)).map((t, idx) => (
+              <div
+                key={t.member_id}
+                onClick={() => router.push(t.blocked ? `/group-tasks/${t.task_id}` : `/group-annotate/${t.task_id}`)}
+                style={{
+                  display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '12px 16px',
+                  borderTop: idx > 0 ? '1px solid var(--border)' : 'none',
+                  cursor: 'pointer', opacity: t.blocked ? 0.6 : 1,
+                }}
+              >
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontSize: 13, fontWeight: 600 }}>
+                    {t.role === 'event_annotator' ? 'Event Annotator' : `Timeline Annotator #${t.annotator_index}`}
+                    {' · '}
+                    <span style={{ fontWeight: 400, color: 'var(--text-muted)' }}>Task #{t.task_id}</span>
+                  </div>
+                  <div style={{ fontSize: 12, color: 'var(--text-disabled)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 480 }}>
+                    {t.blocked ? t.blocked_reason : t.stem_text}
+                  </div>
+                </div>
+                <span style={{
+                  padding: '2px 10px', borderRadius: 20, fontSize: 11, fontWeight: 600, whiteSpace: 'nowrap',
+                  background: t.blocked ? 'var(--surface-alt)' : t.member_status === 'submitted' ? 'var(--success-bg)' : 'var(--warning-bg)',
+                  color: t.blocked ? 'var(--text-muted)' : t.member_status === 'submitted' ? 'var(--success)' : 'var(--warning-text)',
+                }}>
+                  {t.blocked ? 'waiting' : t.member_status.replace('_', ' ')}
+                </span>
+              </div>
+            ))}
+          </div>
         </div>
       )}
 

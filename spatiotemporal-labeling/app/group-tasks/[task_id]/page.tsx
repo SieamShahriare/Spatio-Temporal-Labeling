@@ -3,18 +3,14 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { getGroupTask, decideGroupTask } from '@/lib/api';
-import { GroupTaskDetailOut, GroupTaskStatus } from '@/lib/types';
+import { GroupTaskDetailOut, GroupTaskStatus, GroupTaskDecision as Decision } from '@/lib/types';
 import { useAuth } from '@/lib/AuthContext';
-import AgreementDashboard from '@/components/AgreementDashboard';
+import AgreementDashboard, { OUTCOME_META } from '@/components/AgreementDashboard';
 
 const STATUS_META: Record<GroupTaskStatus, { label: string; bg: string; color: string }> = {
   event_pending: { label: 'Awaiting Events', bg: 'var(--surface-alt)', color: 'var(--text-muted)' },
   timelines_pending: { label: 'Timelines In Progress', bg: 'var(--warning-bg)', color: 'var(--warning-text)' },
-  computing: { label: 'Computing', bg: 'var(--warning-bg)', color: 'var(--warning-text)' },
-  accepted: { label: 'Accepted', bg: 'var(--success-bg)', color: 'var(--success)' },
-  accepted_flagged: { label: 'Accepted (Flagged)', bg: 'var(--warning-bg)', color: 'var(--warning-text)' },
-  adjudication: { label: 'Needs Adjudication', bg: 'var(--error-bg)', color: 'var(--error)' },
-  rejected: { label: 'Rejected', bg: 'var(--error-bg)', color: 'var(--error)' },
+  computed: { label: 'Computed', bg: 'var(--info-bg)', color: 'var(--info)' },
 };
 
 const ROLE_LABEL = (role: string, idx: number | null) =>
@@ -53,8 +49,9 @@ export default function GroupTaskDetailPage() {
     load();
   }, [load, user]);
 
-  const handleDecision = async (decision: string) => {
-    if (!confirm(`Set this task's status to "${decision}"?`)) return;
+  const handleDecision = async (decision: Decision | null) => {
+    const label = decision ? OUTCOME_META[decision].label : 'reopen (clear decision)';
+    if (!confirm(`Set this task's decision to "${label}"?`)) return;
     setDeciding(true);
     try {
       const updated = await decideGroupTask(taskId, decision);
@@ -79,11 +76,10 @@ export default function GroupTaskDetailPage() {
   }
 
   const myMember = task.members.find(m => m.user_id === user?.id);
-  const isCreator = task.created_by === user?.id;
-  const canAnnotate = myMember && myMember.status !== 'done' && (
-    (myMember.role === 'event_annotator' && task.status === 'event_pending') ||
-    (myMember.role === 'timeline_annotator' && task.status === 'timelines_pending')
-  );
+  // D1: editing is always open, gated only by a finalized decision. D6: any
+  // non-participant (not just the person who ran the distribution) can decide.
+  const canAnnotate = !!myMember && task.decision === null;
+  const canSeeScoresAndDecide = !task.scores_hidden;
   const meta = STATUS_META[task.status] ?? STATUS_META.event_pending;
   const hasScores = task.krippendorff_alpha !== null;
 
@@ -107,7 +103,9 @@ export default function GroupTaskDetailPage() {
             onClick={() => router.push(`/group-annotate/${task.id}`)}
             style={{ padding: '10px 18px', background: '#2563eb', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontWeight: 600, fontSize: 13, whiteSpace: 'nowrap' }}
           >
-            {myMember?.role === 'event_annotator' ? 'Mark Events →' : 'Position Timeline →'}
+            {myMember?.role === 'event_annotator'
+              ? (myMember.status === 'pending' ? 'Mark Events →' : 'Continue / Revise Events →')
+              : (myMember?.status === 'submitted' ? 'Review / Revise Timeline →' : 'Position Timeline →')}
           </button>
         )}
       </div>
@@ -123,6 +121,16 @@ export default function GroupTaskDetailPage() {
           <span style={{ padding: '4px 12px', borderRadius: 20, fontSize: 12, fontWeight: 600, background: meta.bg, color: meta.color }}>
             {meta.label}
           </span>
+          {task.decision && (
+            <span style={{ padding: '4px 12px', borderRadius: 20, fontSize: 12, fontWeight: 600, background: 'var(--surface-alt)', color: 'var(--text-primary)', border: '1px solid var(--border-input)' }}>
+              Decision locked — editing frozen
+            </span>
+          )}
+          {myMember && (
+            <span style={{ fontSize: 12, color: 'var(--text-disabled)' }}>
+              Scores are hidden from you while you&apos;re a participant on this task.
+            </span>
+          )}
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12 }}>
           {task.members.map(m => (
@@ -136,20 +144,25 @@ export default function GroupTaskDetailPage() {
                 borderRadius: 20,
                 fontSize: 11,
                 fontWeight: 600,
-                background: m.status === 'done' ? 'var(--success-bg)' : m.status === 'in_progress' ? 'var(--warning-bg)' : 'var(--surface-alt)',
-                color: m.status === 'done' ? 'var(--success)' : m.status === 'in_progress' ? 'var(--warning-text)' : 'var(--text-muted)',
+                background: m.status === 'submitted' ? 'var(--success-bg)' : m.status === 'in_progress' ? 'var(--warning-bg)' : 'var(--surface-alt)',
+                color: m.status === 'submitted' ? 'var(--success)' : m.status === 'in_progress' ? 'var(--warning-text)' : 'var(--text-muted)',
               }}>
                 {m.status.replace('_', ' ')}
               </span>
+              {m.reassigned_from && (
+                <div style={{ fontSize: 10, color: 'var(--text-disabled)', marginTop: 4 }}>reassigned</div>
+              )}
             </div>
           ))}
         </div>
       </div>
 
-      {hasScores && (
+      {canSeeScoresAndDecide && hasScores && (
         <div style={{ marginBottom: 20 }}>
           <AgreementDashboard
-            status={task.status}
+            outcome={task.outcome}
+            decision={task.decision}
+            scoresStale={task.scores_stale}
             krippendorffAlpha={task.krippendorff_alpha}
             cohensKappaAvg={task.cohens_kappa_avg}
             fleissKappa={task.fleiss_kappa}
@@ -160,31 +173,44 @@ export default function GroupTaskDetailPage() {
         </div>
       )}
 
-      {isCreator && hasScores && (
+      {canSeeScoresAndDecide && (
         <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 10, padding: 20 }}>
           <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-muted)', marginBottom: 10 }}>
-            CREATOR OVERRIDE
+            MANUAL DECISION — any non-participant may set or clear this
           </div>
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
             {(['accepted', 'accepted_flagged', 'adjudication', 'rejected'] as const).map(d => (
               <button
                 key={d}
                 onClick={() => handleDecision(d)}
-                disabled={deciding || task.status === d}
+                disabled={deciding || task.decision === d}
                 style={{
                   padding: '8px 14px',
-                  background: task.status === d ? 'var(--text-disabled)' : 'var(--surface-alt)',
+                  background: task.decision === d ? 'var(--text-disabled)' : 'var(--surface-alt)',
                   color: 'var(--text-primary)',
                   border: '1px solid var(--border-input)',
                   borderRadius: 6,
-                  cursor: (deciding || task.status === d) ? 'not-allowed' : 'pointer',
+                  cursor: (deciding || task.decision === d) ? 'not-allowed' : 'pointer',
                   fontWeight: 500,
                   fontSize: 12,
                 }}
               >
-                {STATUS_META[d].label}
+                {OUTCOME_META[d].label}
               </button>
             ))}
+            {task.decision && (
+              <button
+                onClick={() => handleDecision(null)}
+                disabled={deciding}
+                style={{
+                  padding: '8px 14px', background: 'var(--error-bg)', color: 'var(--error)',
+                  border: '1px solid var(--error-border)', borderRadius: 6,
+                  cursor: deciding ? 'not-allowed' : 'pointer', fontWeight: 500, fontSize: 12,
+                }}
+              >
+                Reopen (clear decision)
+              </button>
+            )}
           </div>
         </div>
       )}

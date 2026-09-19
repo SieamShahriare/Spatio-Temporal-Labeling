@@ -244,6 +244,8 @@ class GroupMemberOut(BaseModel):
     annotator_index: Optional[int] = None
     started_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
+    reassigned_from: Optional[int] = None
+    reassigned_at: Optional[datetime] = None
 
 
 class GroupTaskOut(BaseModel):
@@ -251,6 +253,9 @@ class GroupTaskOut(BaseModel):
     stem_id: int
     stem_text: str
     status: str
+    outcome: Optional[str] = None
+    decision: Optional[str] = None
+    scores_stale: bool = False
     created_by: int
     created_at: datetime
     updated_at: datetime
@@ -263,6 +268,7 @@ class GroupTaskDetailOut(GroupTaskOut):
     cohens_kappa_avg: Optional[float] = None
     fleiss_kappa: Optional[float] = None
     agreement_details: Optional[Dict[str, Any]] = None
+    scores_hidden: bool = False
 
 
 class GroupEventSpanCreate(BaseModel):
@@ -287,6 +293,7 @@ class TimelinePositionIn(BaseModel):
     span_id: int
     tl_start: float
     tl_end: float
+    source: str = 'manual'  # 'manual' | 'llm' — see context/group_workflow_redesign.md §8
 
 
 class TimelineUpsertRequest(BaseModel):
@@ -309,13 +316,53 @@ class GroupAgreementOut(BaseModel):
     fleiss_kappa: Optional[float] = None
     acceptance_threshold: float
     agreement_details: Optional[Dict[str, Any]] = None
+    scores_stale: bool = False
 
 
 class GroupTaskDecision(BaseModel):
-    decision: str  # 'accepted' | 'accepted_flagged' | 'adjudication' | 'rejected'
+    decision: Optional[str] = None  # 'accepted' | 'accepted_flagged' | 'adjudication' | 'rejected' | None to reopen
 
 
 class UserBriefOut(BaseModel):
     id: int
     username: str
     email: str
+
+
+# ---------------------------------------------------------------------------
+# Distribution (bulk group-task creation)
+# See context/group_workflow_redesign.md §3, §9.6, §10.
+# ---------------------------------------------------------------------------
+
+class DistributeRequest(BaseModel):
+    stem_ids: List[int] = Field(..., min_length=1)
+    pool_user_ids: Optional[List[int]] = None  # defaults to all registered users
+
+
+class DistributeSkip(BaseModel):
+    stem_id: int
+    reason: str
+
+
+class DistributeResponse(BaseModel):
+    distribution_run_id: int
+    created_task_ids: List[int]
+    skipped: List[DistributeSkip]
+    pool_size: int
+
+
+class ReassignRequest(BaseModel):
+    user_id: int
+
+
+class MyTaskOut(BaseModel):
+    task_id: int
+    member_id: int
+    stem_id: int
+    stem_text: str
+    role: str
+    annotator_index: Optional[int] = None
+    member_status: str
+    task_status: str
+    blocked: bool
+    blocked_reason: Optional[str] = None

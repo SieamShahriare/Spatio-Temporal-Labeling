@@ -11,7 +11,7 @@ import os
 from dotenv import load_dotenv
 
 load_dotenv()
-BASE_URL = "http://localhost:8000"
+BASE_URL = "http://127.0.0.1:8000"  # not localhost — an unrelated process on this machine holds the IPv6 wildcard bind
 DB_URL = os.getenv("DATABASE_URL")
 
 async def run_all_tests():

@@ -240,12 +240,20 @@ export const deleteSpan = (spanId: number) =>
   apiFetch(`/spans/${spanId}`, { method: 'DELETE' });
 
 // ====== Group annotation workflow (inter-annotator agreement) ======
-// See context/cohen_kappa.md for the design.
+// See context/group_workflow_redesign.md for the design.
 
 export const listUsers = () => apiFetch('/users');
 
 export const createGroupTask = (data: { stem_id: number; event_user_id: number; timeline_user_ids: number[] }) =>
   apiFetch('/group-tasks', { method: 'POST', body: JSON.stringify(data) });
+
+export const distributeGroupTasks = (data: { stem_ids: number[]; pool_user_ids?: number[] }) =>
+  apiFetch('/group-tasks/distribute', { method: 'POST', body: JSON.stringify(data) });
+
+export const listMyTasks = () => apiFetch('/my-tasks');
+
+export const reassignGroupMember = (taskId: number, memberId: number, userId: number) =>
+  apiFetch(`/group-tasks/${taskId}/members/${memberId}/reassign`, { method: 'POST', body: JSON.stringify({ user_id: userId }) });
 
 export const listGroupTasks = () => apiFetch('/group-tasks');
 
@@ -266,13 +274,28 @@ export const submitGroupEvents = (taskId: number) =>
 
 export const getMyTimeline = (taskId: number) => apiFetch(`/group-tasks/${taskId}/my-timeline`);
 
-export const upsertMyTimeline = (taskId: number, positions: Array<{ span_id: number; tl_start: number; tl_end: number }>) =>
+export const upsertMyTimeline = (taskId: number, positions: Array<{ span_id: number; tl_start: number; tl_end: number; source?: string }>) =>
   apiFetch(`/group-tasks/${taskId}/my-timeline`, { method: 'PUT', body: JSON.stringify({ positions }) });
+
+export const llmExtractMyTimeline = (taskId: number) =>
+  apiFetch(`/group-tasks/${taskId}/my-timeline/llm-extract`, { method: 'POST' });
+
+export const getMyMatrix = (taskId: number) => apiFetch(`/group-tasks/${taskId}/my-matrix`);
+
+export const saveMyMatrix = (taskId: number) =>
+  apiFetch(`/group-tasks/${taskId}/my-matrix/save`, { method: 'POST' });
+
+export const overrideMyMatrix = (taskId: number, i: number, j: number, relation_code: number) =>
+  apiFetch(`/group-tasks/${taskId}/my-matrix/override`, { method: 'PATCH', body: JSON.stringify({ i, j, relation_code }) });
 
 export const submitGroupTimeline = (taskId: number) =>
   apiFetch(`/group-tasks/${taskId}/submit-timeline`, { method: 'POST' });
 
 export const getGroupAgreement = (taskId: number) => apiFetch(`/group-tasks/${taskId}/agreement`);
 
-export const decideGroupTask = (taskId: number, decision: string) =>
+export const getGroupRevisions = (taskId: number) => apiFetch(`/group-tasks/${taskId}/revisions`);
+
+export const getGroupAgreementRuns = (taskId: number) => apiFetch(`/group-tasks/${taskId}/agreement-runs`);
+
+export const decideGroupTask = (taskId: number, decision: string | null) =>
   apiFetch(`/group-tasks/${taskId}/accept`, { method: 'POST', body: JSON.stringify({ decision }) });

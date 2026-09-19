@@ -1,9 +1,11 @@
 'use client';
 
-import { AgreementDetails, GroupMemberOut, GroupTaskStatus } from '@/lib/types';
+import { AgreementDetails, GroupMemberOut, GroupTaskOutcome, GroupTaskDecision } from '@/lib/types';
 
 interface Props {
-  status: GroupTaskStatus;
+  outcome: GroupTaskOutcome | null;
+  decision: GroupTaskDecision | null;
+  scoresStale: boolean;
   krippendorffAlpha: number | null;
   cohensKappaAvg: number | null;
   fleissKappa: number | null;
@@ -12,10 +14,7 @@ interface Props {
   members: GroupMemberOut[];
 }
 
-const STATUS_META: Record<GroupTaskStatus, { label: string; bg: string; color: string }> = {
-  event_pending: { label: 'Awaiting Events', bg: 'var(--surface-alt)', color: 'var(--text-muted)' },
-  timelines_pending: { label: 'Timelines In Progress', bg: 'var(--warning-bg)', color: 'var(--warning-text)' },
-  computing: { label: 'Computing Agreement', bg: 'var(--warning-bg)', color: 'var(--warning-text)' },
+export const OUTCOME_META: Record<GroupTaskOutcome, { label: string; bg: string; color: string }> = {
   accepted: { label: 'Accepted', bg: 'var(--success-bg)', color: 'var(--success)' },
   accepted_flagged: { label: 'Accepted (Flagged)', bg: 'var(--warning-bg)', color: 'var(--warning-text)' },
   adjudication: { label: 'Needs Adjudication', bg: 'var(--error-bg)', color: 'var(--error)' },
@@ -36,17 +35,28 @@ function ScoreCard({ label, value, hint }: { label: string; value: number | null
 }
 
 export default function AgreementDashboard({
-  status, krippendorffAlpha, cohensKappaAvg, fleissKappa, acceptanceThreshold, agreementDetails, members,
+  outcome, decision, scoresStale, krippendorffAlpha, cohensKappaAvg, fleissKappa, acceptanceThreshold, agreementDetails, members,
 }: Props) {
-  const meta = STATUS_META[status] ?? STATUS_META.event_pending;
   const memberById = new Map(members.map(m => [m.user_id, m]));
 
   return (
     <div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16 }}>
-        <span style={{ padding: '4px 12px', borderRadius: 20, fontSize: 12, fontWeight: 600, background: meta.bg, color: meta.color }}>
-          {meta.label}
-        </span>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16, flexWrap: 'wrap' }}>
+        {outcome && (
+          <span style={{ padding: '4px 12px', borderRadius: 20, fontSize: 12, fontWeight: 600, background: OUTCOME_META[outcome].bg, color: OUTCOME_META[outcome].color }}>
+            {OUTCOME_META[outcome].label} (automatic)
+          </span>
+        )}
+        {decision && (
+          <span style={{ padding: '4px 12px', borderRadius: 20, fontSize: 12, fontWeight: 600, background: OUTCOME_META[decision].bg, color: OUTCOME_META[decision].color, border: '1px solid currentColor' }}>
+            {OUTCOME_META[decision].label} (manual decision)
+          </span>
+        )}
+        {scoresStale && (
+          <span style={{ padding: '4px 12px', borderRadius: 20, fontSize: 12, fontWeight: 600, background: 'var(--warning-bg)', color: 'var(--warning-text)' }}>
+            Stale — someone edited after this was computed
+          </span>
+        )}
         <span style={{ fontSize: 12, color: 'var(--text-disabled)' }}>
           Acceptance threshold: κ/α ≥ {acceptanceThreshold.toFixed(2)}
         </span>

@@ -222,17 +222,14 @@ export interface UserBrief {
   email: string;
 }
 
-export type GroupTaskStatus =
-  | 'event_pending'
-  | 'timelines_pending'
-  | 'computing'
-  | 'accepted'
-  | 'accepted_flagged'
-  | 'adjudication'
-  | 'rejected';
+// Workflow stage only. Verdicts live separately in `outcome` (automatic) and
+// `decision` (human override) — see context/group_workflow_redesign.md §4.
+export type GroupTaskStatus = 'event_pending' | 'timelines_pending' | 'computed';
+export type GroupTaskOutcome = 'accepted' | 'accepted_flagged' | 'adjudication' | 'rejected';
+export type GroupTaskDecision = 'accepted' | 'accepted_flagged' | 'adjudication' | 'rejected';
 
 export type GroupMemberRole = 'event_annotator' | 'timeline_annotator';
-export type GroupMemberStatus = 'pending' | 'in_progress' | 'done';
+export type GroupMemberStatus = 'pending' | 'in_progress' | 'submitted';
 
 export interface GroupMemberOut {
   id: number;
@@ -243,6 +240,8 @@ export interface GroupMemberOut {
   annotator_index: number | null;
   started_at: string | null;
   completed_at: string | null;
+  reassigned_from: number | null;
+  reassigned_at: string | null;
 }
 
 export interface GroupTaskOut {
@@ -250,6 +249,9 @@ export interface GroupTaskOut {
   stem_id: number;
   stem_text: string;
   status: GroupTaskStatus;
+  outcome: GroupTaskOutcome | null;
+  decision: GroupTaskDecision | null;
+  scores_stale: boolean;
   created_by: number;
   created_at: string;
   updated_at: string;
@@ -267,6 +269,7 @@ export interface GroupTaskDetailOut extends GroupTaskOut {
   cohens_kappa_avg: number | null;
   fleiss_kappa: number | null;
   agreement_details: AgreementDetails | null;
+  scores_hidden: boolean;
 }
 
 export interface GroupEventSpanOut {
@@ -301,5 +304,51 @@ export interface GroupAgreementOut {
   fleiss_kappa: number | null;
   acceptance_threshold: number;
   agreement_details: AgreementDetails | null;
+  scores_stale: boolean;
+}
+
+export interface DistributeSkip {
+  stem_id: number;
+  reason: string;
+}
+
+export interface DistributeResponse {
+  distribution_run_id: number;
+  created_task_ids: number[];
+  skipped: DistributeSkip[];
+  pool_size: number;
+}
+
+export interface MyTaskOut {
+  task_id: number;
+  member_id: number;
+  stem_id: number;
+  stem_text: string;
+  role: GroupMemberRole;
+  annotator_index: number | null;
+  member_status: GroupMemberStatus;
+  task_status: GroupTaskStatus;
+  blocked: boolean;
+  blocked_reason: string | null;
+}
+
+export interface RevisionOut {
+  member_id: number;
+  user_id: number;
+  username: string;
+  annotator_index: number | null;
+  revision_no: number;
+  had_llm_assist: boolean;
+  submitted_at: string;
+}
+
+export interface AgreementRunOut {
+  run_no: number;
+  krippendorff_alpha: number | null;
+  cohens_kappa_avg: number | null;
+  fleiss_kappa: number | null;
+  outcome: GroupTaskOutcome | null;
+  based_on_revisions: Record<string, number>;
+  computed_at: string;
 }
 

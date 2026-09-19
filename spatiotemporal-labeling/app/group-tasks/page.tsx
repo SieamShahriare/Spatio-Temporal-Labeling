@@ -5,15 +5,19 @@ import { useRouter } from 'next/navigation';
 import { listGroupTasks, getGroupTasksDashboard } from '@/lib/api';
 import { GroupTaskOut, GroupTaskStatus } from '@/lib/types';
 import { useAuth } from '@/lib/AuthContext';
+import { OUTCOME_META } from '@/components/AgreementDashboard';
 
 const STATUS_META: Record<GroupTaskStatus, { label: string; bg: string; color: string }> = {
   event_pending: { label: 'Awaiting Events', bg: 'var(--surface-alt)', color: 'var(--text-muted)' },
   timelines_pending: { label: 'Timelines In Progress', bg: 'var(--warning-bg)', color: 'var(--warning-text)' },
-  computing: { label: 'Computing', bg: 'var(--warning-bg)', color: 'var(--warning-text)' },
-  accepted: { label: 'Accepted', bg: 'var(--success-bg)', color: 'var(--success)' },
-  accepted_flagged: { label: 'Accepted (Flagged)', bg: 'var(--warning-bg)', color: 'var(--warning-text)' },
-  adjudication: { label: 'Adjudication', bg: 'var(--error-bg)', color: 'var(--error)' },
-  rejected: { label: 'Rejected', bg: 'var(--error-bg)', color: 'var(--error)' },
+  computed: { label: 'Computed', bg: 'var(--info-bg)', color: 'var(--info)' },
+};
+
+// The dashboard endpoint buckets by outcome once one exists, else by workflow
+// status — so this card grid keys off either vocabulary.
+const CARD_META: Record<string, { label: string; bg: string; color: string }> = {
+  ...STATUS_META,
+  ...OUTCOME_META,
 };
 
 export default function GroupTasksPage() {
@@ -69,10 +73,10 @@ export default function GroupTasksPage() {
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
           <button
-            onClick={() => router.push('/group-tasks/create')}
+            onClick={() => router.push('/group-tasks/distribute')}
             style={{ padding: '8px 16px', background: '#2563eb', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontWeight: 600, fontSize: 13 }}
           >
-            + New Group Task
+            Distribute Stems
           </button>
           <button
             onClick={() => logout()}
@@ -92,7 +96,7 @@ export default function GroupTasksPage() {
       {dashboard && (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 16, marginBottom: 28 }}>
           {Object.entries(dashboard.by_status).map(([status, n]) => {
-            const meta = STATUS_META[status as GroupTaskStatus] ?? { label: status, bg: 'var(--surface-alt)', color: 'var(--text-muted)' };
+            const meta = CARD_META[status] ?? { label: status, bg: 'var(--surface-alt)', color: 'var(--text-muted)' };
             return (
               <div key={status} style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 10, padding: 16 }}>
                 <div style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 6, color: meta.color }}>{meta.label}</div>
@@ -115,10 +119,10 @@ export default function GroupTasksPage() {
         <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 10, padding: 40, textAlign: 'center' }}>
           <p style={{ color: 'var(--text-muted)', marginBottom: 16 }}>No group annotation tasks yet.</p>
           <button
-            onClick={() => router.push('/group-tasks/create')}
+            onClick={() => router.push('/group-tasks/distribute')}
             style={{ padding: '9px 20px', background: '#2563eb', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontWeight: 600, fontSize: 14 }}
           >
-            Create the first one
+            Distribute Stems
           </button>
         </div>
       ) : (
@@ -136,6 +140,7 @@ export default function GroupTasksPage() {
             <tbody>
               {tasks.map(task => {
                 const meta = STATUS_META[task.status] ?? STATUS_META.event_pending;
+                const outcomeMeta = task.outcome ? OUTCOME_META[task.outcome] : null;
                 const role = myRole(task);
                 return (
                   <tr
@@ -151,9 +156,19 @@ export default function GroupTasksPage() {
                       <span style={{ padding: '2px 10px', borderRadius: 20, fontSize: 11, fontWeight: 600, background: meta.bg, color: meta.color }}>
                         {meta.label}
                       </span>
+                      {outcomeMeta && (
+                        <span style={{ marginLeft: 6, padding: '2px 10px', borderRadius: 20, fontSize: 11, fontWeight: 600, background: outcomeMeta.bg, color: outcomeMeta.color }}>
+                          {outcomeMeta.label}
+                        </span>
+                      )}
+                      {task.scores_stale && (
+                        <span style={{ marginLeft: 6, fontSize: 11, color: 'var(--warning-text)' }} title="Someone edited after this was computed">
+                          stale
+                        </span>
+                      )}
                     </td>
                     <td style={td}>
-                      {role ? `${role.role === 'event_annotator' ? 'Event Annotator' : `Timeline Annotator #${role.annotator_index}`} (${role.status})` : task.created_by === user?.id ? 'Creator' : '—'}
+                      {role ? `${role.role === 'event_annotator' ? 'Event Annotator' : `Timeline Annotator #${role.annotator_index}`} (${role.status.replace('_', ' ')})` : task.created_by === user?.id ? 'Creator' : '—'}
                     </td>
                     <td style={td}>{new Date(task.created_at).toLocaleDateString()}</td>
                   </tr>
