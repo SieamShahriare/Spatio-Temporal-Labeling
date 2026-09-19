@@ -247,7 +247,12 @@ export const listUsers = () => apiFetch('/users');
 export const createGroupTask = (data: { stem_id: number; event_user_id: number; timeline_user_ids: number[] }) =>
   apiFetch('/group-tasks', { method: 'POST', body: JSON.stringify(data) });
 
-export const distributeGroupTasks = (data: { stem_ids: number[]; pool_user_ids?: number[] }) =>
+export const distributeGroupTasks = (data: {
+  stem_ids: number[];
+  pool_user_ids?: number[];
+  mode?: 'random' | 'manual';
+  event_user_id?: number;
+}) =>
   apiFetch('/group-tasks/distribute', { method: 'POST', body: JSON.stringify(data) });
 
 export const listMyTasks = () => apiFetch('/my-tasks');

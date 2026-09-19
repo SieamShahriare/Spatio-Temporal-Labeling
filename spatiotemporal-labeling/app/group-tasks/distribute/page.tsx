@@ -6,11 +6,14 @@ import { listStems, listUsers, distributeGroupTasks } from '@/lib/api';
 import { StemOut, UserBrief, DistributeResponse } from '@/lib/types';
 import { useAuth } from '@/lib/AuthContext';
 
-// Bulk allocation per context/group_workflow_redesign.md §3: pick stems + a
-// pool, and every role on every stem is assigned automatically (shuffled
-// ring, re-shuffled each full cycle). Replaces one-task-at-a-time creation
-// as the primary path; see app/group-tasks/create/page.tsx for that form,
-// kept for now per spec §10.3.
+type Mode = 'random' | 'manual';
+
+// Bulk allocation per context/group_workflow_redesign.md §3, extended with a
+// manual mode: pin one fixed event annotator across the whole batch, and let
+// the rest of the pool rotate through the 3 timeline slots (same shuffle/
+// balance logic as random mode, just applied to pool-minus-that-person).
+// Replaces one-task-at-a-time creation as the primary path; see
+// app/group-tasks/create/page.tsx for that form, kept for now per spec §10.3.
 export default function DistributeGroupTasksPage() {
   const router = useRouter();
   const { user, loading: authLoading } = useAuth();
@@ -18,6 +21,8 @@ export default function DistributeGroupTasksPage() {
   const [users, setUsers] = useState<UserBrief[]>([]);
   const [selectedStemIds, setSelectedStemIds] = useState<Set<number>>(new Set());
   const [selectedUserIds, setSelectedUserIds] = useState<Set<number>>(new Set());
+  const [mode, setMode] = useState<Mode>('random');
+  const [eventUserId, setEventUserId] = useState<number | ''>('');
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
@@ -59,13 +64,18 @@ export default function DistributeGroupTasksPage() {
     setSelectedUserIds(prev => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id); else next.add(id);
+      if (eventUserId !== '' && !next.has(eventUserId)) setEventUserId('');
       return next;
     });
   };
 
   const availableStems = stems.filter(s => s.state === 'available');
   const poolSize = selectedUserIds.size;
-  const canSubmit = selectedStemIds.size > 0 && poolSize >= 4;
+  const timelinePoolSize = mode === 'manual' && eventUserId !== '' ? poolSize - 1 : poolSize;
+
+  const canSubmit = selectedStemIds.size > 0 && (
+    mode === 'random' ? poolSize >= 4 : (eventUserId !== '' && timelinePoolSize >= 3)
+  );
 
   const handleSubmit = async () => {
     if (!canSubmit) return;
@@ -75,6 +85,8 @@ export default function DistributeGroupTasksPage() {
       const res: DistributeResponse = await distributeGroupTasks({
         stem_ids: Array.from(selectedStemIds),
         pool_user_ids: Array.from(selectedUserIds),
+        mode,
+        ...(mode === 'manual' ? { event_user_id: Number(eventUserId) } : {}),
       });
       setResult(res);
       setSelectedStemIds(new Set());
@@ -98,10 +110,25 @@ export default function DistributeGroupTasksPage() {
         ← Group Tasks
       </button>
       <h1 style={{ fontSize: 20, fontWeight: 700, margin: '0 0 4px' }}>Distribute Stems</h1>
-      <p style={{ fontSize: 13, color: 'var(--text-muted)', margin: '0 0 24px' }}>
-        Every selected stem gets 1 event annotator + 3 timeline annotators, assigned automatically
-        from the pool below (randomized pairings, balanced workload — see context/group_workflow_redesign.md §3).
+      <p style={{ fontSize: 13, color: 'var(--text-muted)', margin: '0 0 20px' }}>
+        Every selected stem gets 1 event annotator + 3 timeline annotators.
       </p>
+
+      <div style={{ display: 'flex', gap: 0, marginBottom: 20, borderBottom: '2px solid var(--border)' }}>
+        {(['random', 'manual'] as const).map(m => (
+          <button
+            key={m}
+            onClick={() => setMode(m)}
+            style={{
+              padding: '8px 20px', border: 'none', background: 'none', cursor: 'pointer', fontSize: 14,
+              fontWeight: mode === m ? 700 : 400, color: mode === m ? '#2563eb' : 'var(--text-muted)',
+              borderBottom: mode === m ? '2px solid #2563eb' : '2px solid transparent', marginBottom: -2,
+            }}
+          >
+            {m === 'random' ? 'Random' : 'Manual'}
+          </button>
+        ))}
+      </div>
 
       {error && (
         <div style={{ background: 'var(--error-bg)', border: '1px solid var(--error-border)', borderRadius: 6, padding: '8px 12px', marginBottom: 16, fontSize: 13, color: 'var(--error)' }}>
@@ -131,18 +158,35 @@ export default function DistributeGroupTasksPage() {
         </div>
       )}
 
+      {mode === 'random' ? (
+        <p style={{ fontSize: 12, color: 'var(--text-disabled)', marginBottom: 16, marginTop: -4 }}>
+          All 4 roles are assigned automatically from the pool below (randomized pairings, balanced workload,
+          re-shuffled every full cycle — see context/group_workflow_redesign.md §3).
+        </p>
+      ) : (
+        <p style={{ fontSize: 12, color: 'var(--text-disabled)', marginBottom: 16, marginTop: -4 }}>
+          The event annotator you pick below does event labeling on <strong>every</strong> selected stem.
+          Everyone else in the pool rotates through the 3 timeline slots per stem, same balancing as random mode.
+        </p>
+      )}
+
       <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 10, padding: 20, marginBottom: 20 }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
           <h2 style={{ fontSize: 14, fontWeight: 700, margin: 0 }}>Annotator Pool ({poolSize})</h2>
           <div style={{ display: 'flex', gap: 8 }}>
             <button onClick={() => setSelectedUserIds(new Set(users.map(u => u.id)))} style={linkBtn}>Select all</button>
-            <button onClick={() => setSelectedUserIds(new Set())} style={linkBtn}>Clear</button>
+            <button onClick={() => { setSelectedUserIds(new Set()); setEventUserId(''); }} style={linkBtn}>Clear</button>
           </div>
         </div>
-        {poolSize < 4 && (
+        {mode === 'random' && poolSize < 4 && (
           <p style={{ fontSize: 12, color: 'var(--error)', marginBottom: 10 }}>
             At least 4 annotators are required. Below 5, tasks are scored automatically but have no manual accept/reject
             (see context/group_workflow_redesign.md §13).
+          </p>
+        )}
+        {mode === 'manual' && timelinePoolSize < 3 && (
+          <p style={{ fontSize: 12, color: 'var(--error)', marginBottom: 10 }}>
+            At least 3 annotators besides the fixed event annotator are required for the timeline roles.
           </p>
         )}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: 6, maxHeight: 220, overflowY: 'auto' }}>
@@ -153,6 +197,24 @@ export default function DistributeGroupTasksPage() {
             </label>
           ))}
         </div>
+
+        {mode === 'manual' && (
+          <div style={{ marginTop: 14, paddingTop: 14, borderTop: '1px solid var(--border)' }}>
+            <label style={{ display: 'block', fontSize: 12, fontWeight: 600, color: 'var(--text-muted)', marginBottom: 6 }}>
+              Event Annotator (fixed for this whole batch)
+            </label>
+            <select
+              value={eventUserId}
+              onChange={e => setEventUserId(e.target.value ? Number(e.target.value) : '')}
+              style={{ width: '100%', padding: '8px 10px', borderRadius: 6, border: '1px solid var(--border-input)', fontSize: 13, background: 'var(--surface)', color: 'var(--text-primary)' }}
+            >
+              <option value="">Select a user…</option>
+              {users.filter(u => selectedUserIds.has(u.id)).map(u => (
+                <option key={u.id} value={u.id}>{u.username}</option>
+              ))}
+            </select>
+          </div>
+        )}
       </div>
 
       <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 10, padding: 20, marginBottom: 20 }}>
