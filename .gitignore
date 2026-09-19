@@ -1,0 +1,15 @@
+# Secrets: never commit real env files (set them in the Render / Vercel dashboards)
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Node / Next.js
+node_modules/
+.next/
+.vercel

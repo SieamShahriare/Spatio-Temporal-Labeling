@@ -1,5 +1,12 @@
 // TypeScript types for Spatiotemporal Annotator
 
+export interface User {
+  id: number;
+  email: string;
+  username: string;
+  created_at: string;
+}
+
 export interface Session {
   id: number;
   username: string;
@@ -15,20 +22,21 @@ export interface Span {
   id: number;
   session_id: number;
   label_type: 'Event' | 'Time';
-  seq_label: string; // E1, E2, T1, T2...
+  seq_label: string;
   span_text: string;
   char_start: number;
   char_end: number;
   tl_start: number;
   tl_end: number;
+  source: 'manual' | 'llm';
   created_at: string;
 }
 
 export interface MatrixSnapshot {
   id: number;
   session_id: number;
-  matrix_json: string; // JSON string of number[][]
-  span_order: string;  // JSON string of {id, seq_label}[]
+  matrix_json: string;
+  span_order: string;
   created_at: string;
   updated_at: string;
 }
@@ -73,3 +81,135 @@ export const ALLEN_RELATIONS: Record<number, { name: string; symbol: string }> =
 };
 
 export const ALLEN_CODES = [1, 2, 3, 4, 5, 6, 7, -1, -2, -3, -4, -5, -6];
+
+// ====== Auth types ======
+
+export interface SignupRequest {
+  email: string;
+  password: string;
+  username: string;
+}
+
+export interface LoginRequest {
+  email: string;
+  password: string;
+}
+
+export interface AuthMeResponse {
+  user: User;
+  csrf_token: string;
+}
+
+// ====== Stems types ======
+
+export type StemState = 'available' | 'booked' | 'completed';
+
+export interface StemOut {
+  id: number;
+  text: string;
+  word_count: number;
+  state: StemState;
+  booked_by: { id: number; username: string } | null;
+  locked_until: string | null;
+  completed_by: { id: number; username: string } | null;
+  completed_at: string | null;
+}
+
+export interface StemsListResponse {
+  items: StemOut[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
+export interface StemsImportResponse {
+  created: number;
+  skipped: number;
+}
+
+// ====== Batch types ======
+
+export type BatchStatus = 'active' | 'released' | 'expired';
+
+export interface BatchOut {
+  id: number;
+  name: string;
+  owner_id: number;
+  owner_username: string;
+  created_at: string;
+  locked_at: string;
+  expires_at: string;
+  rebook_count: number;
+  status: BatchStatus;
+  remaining_seconds: number;
+  progress: { done: number; total: number };
+}
+
+export interface BatchStemOut {
+  id: number;
+  stem_id: number;
+  stem_text: string;
+  word_count: number;
+  status: string;
+  completed_by: { id: number; username: string } | null;
+  completed_at: string | null;
+  updated_at: string | null;
+}
+
+export interface BatchDetailOut extends BatchOut {
+  stems: BatchStemOut[];
+}
+
+// ====== Batch-stem annotation types ======
+
+export interface BatchSpanOut {
+  id: number;
+  batch_stem_id: number;
+  session_id: number;
+  label_type: 'Event' | 'Time';
+  seq_label: string;
+  span_text: string;
+  char_start: number;
+  char_end: number;
+  tl_start: number;
+  tl_end: number;
+  source: 'manual' | 'llm';
+  created_at: string;
+}
+
+export interface BatchStemDetail {
+  id: number;
+  batch_id: number;
+  stem_id: number;
+  stem_text: string;
+  word_count: number;
+  status: string;
+  completed_by: number | null;
+  completed_at: string | null;
+  updated_at: string | null;
+  spans: BatchSpanOut[];
+  expires_at: string;
+}
+
+export interface SkippedEvent {
+  text: string;
+  reason: string;
+}
+
+export interface ExtractEventsResponse {
+  events: Array<{ span_text: string; char_start: number; char_end: number }>;
+  skipped: Array<{ text: string; reason: string }>;
+}
+
+export interface ExtractTimelineResponse {
+  updated: Array<{ span_id: number; seq_label: string; span_text: string; tl_start: number; tl_end: number }>;
+  skipped: Array<{ text: string; reason: string }>;
+}
+
+export interface LLMLabelAndTimelineResponse {
+  events: Array<{ span_text: string; char_start: number; char_end: number; label_type: string; source: string }>;
+  skipped_events: Array<{ text: string; reason: string }>;
+  timeline_updated: Array<{ span_id: number; seq_label: string; span_text: string; tl_start: number; tl_end: number }>;
+  timeline_skipped: Array<{ text: string; reason: string }>;
+}
+

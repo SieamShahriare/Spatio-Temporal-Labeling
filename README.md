@@ -39,6 +39,31 @@ Open **http://localhost:3000**.
 
 ---
 
+## Deployment (free tier)
+
+| Part     | Host                  | Config                                   |
+|----------|-----------------------|------------------------------------------|
+| Database | Neon (free)           | Already hosted                           |
+| Backend  | Render (free web svc) | `render.yaml` (Blueprint)                |
+| Frontend | Vercel (Hobby)        | Root directory `spatiotemporal-labeling` |
+
+The frontend proxies `/backend/*` to the API (see `next.config.ts`), so auth cookies stay first-party.
+
+**Backend (Render):** New → Blueprint → pick this repo. Render reads `render.yaml` and prompts for
+`DATABASE_URL`, `LLM_PROVIDER`, `LLM_MODEL`, `LLM_API_KEY`. Free services sleep after 15 min idle
+(first request takes ~1 min to wake).
+
+**Frontend (Vercel):** Import the repo, set Root Directory to `spatiotemporal-labeling`, and add env vars:
+
+```
+NEXT_PUBLIC_API_URL=/backend
+BACKEND_URL=https://<your-render-service>.onrender.com
+```
+
+Secrets live only in the Render/Vercel dashboards. Never commit `.env` files (they are gitignored).
+
+---
+
 ## User Flow
 
 1. **Landing Page** — Enter username, paste stem text → click **Start Labeling**
