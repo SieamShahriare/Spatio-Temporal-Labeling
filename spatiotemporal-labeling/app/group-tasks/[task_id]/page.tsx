@@ -2,8 +2,8 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import { getGroupTask, decideGroupTask } from '@/lib/api';
-import { GroupTaskDetailOut, GroupTaskStatus, GroupTaskDecision as Decision } from '@/lib/types';
+import { getGroupTask, decideGroupTask, listUsers, reassignGroupMember } from '@/lib/api';
+import { GroupTaskDetailOut, GroupTaskStatus, GroupTaskDecision as Decision, UserBrief } from '@/lib/types';
 import { useAuth } from '@/lib/AuthContext';
 import AgreementDashboard, { OUTCOME_META } from '@/components/AgreementDashboard';
 
@@ -25,6 +25,10 @@ export default function GroupTaskDetailPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [deciding, setDeciding] = useState(false);
+  const [allUsers, setAllUsers] = useState<UserBrief[]>([]);
+  const [reassigningMemberId, setReassigningMemberId] = useState<number | null>(null);
+  const [reassignTarget, setReassignTarget] = useState<number | ''>('');
+  const [reassigning, setReassigning] = useState(false);
 
   useEffect(() => {
     if (!authLoading && !user) router.replace('/login');
@@ -47,7 +51,24 @@ export default function GroupTaskDetailPage() {
     if (!user) return;
     // eslint-disable-next-line react-hooks/set-state-in-effect
     load();
+    listUsers().then(setAllUsers).catch(() => {});
   }, [load, user]);
+
+  const handleReassign = async (memberId: number) => {
+    if (!reassignTarget) return;
+    if (!confirm('Reassign this role? The new person starts with a clean slate; any work already done under this slot stays attached to the record.')) return;
+    setReassigning(true);
+    try {
+      const updated = await reassignGroupMember(taskId, memberId, Number(reassignTarget));
+      setTask(updated);
+      setReassigningMemberId(null);
+      setReassignTarget('');
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : 'Failed to reassign.');
+    } finally {
+      setReassigning(false);
+    }
+  };
 
   const handleDecision = async (decision: Decision | null) => {
     const label = decision ? OUTCOME_META[decision].label : 'reopen (clear decision)';
@@ -133,27 +154,71 @@ export default function GroupTaskDetailPage() {
           )}
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12 }}>
-          {task.members.map(m => (
-            <div key={m.id} style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12 }}>
-              <div style={{ fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.03em', marginBottom: 4 }}>
-                {ROLE_LABEL(m.role, m.annotator_index)}
+          {task.members.map(m => {
+            const otherRoleUserIds = new Set(task.members.filter(o => o.id !== m.id).map(o => o.user_id));
+            const eligible = allUsers.filter(u => u.id !== m.user_id && !otherRoleUserIds.has(u.id));
+            const isReassigning = reassigningMemberId === m.id;
+            return (
+              <div key={m.id} style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12 }}>
+                <div style={{ fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.03em', marginBottom: 4 }}>
+                  {ROLE_LABEL(m.role, m.annotator_index)}
+                </div>
+                <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 4 }}>{m.username}</div>
+                <span style={{
+                  padding: '2px 8px',
+                  borderRadius: 20,
+                  fontSize: 11,
+                  fontWeight: 600,
+                  background: m.status === 'submitted' ? 'var(--success-bg)' : m.status === 'in_progress' ? 'var(--warning-bg)' : 'var(--surface-alt)',
+                  color: m.status === 'submitted' ? 'var(--success)' : m.status === 'in_progress' ? 'var(--warning-text)' : 'var(--text-muted)',
+                }}>
+                  {m.status.replace('_', ' ')}
+                </span>
+                {m.reassigned_from && (
+                  <div style={{ fontSize: 10, color: 'var(--text-disabled)', marginTop: 4 }}>reassigned</div>
+                )}
+
+                {m.status !== 'submitted' && !task.decision && (
+                  isReassigning ? (
+                    <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 6 }}>
+                      <select
+                        value={reassignTarget}
+                        onChange={e => setReassignTarget(e.target.value ? Number(e.target.value) : '')}
+                        style={{ fontSize: 12, padding: '4px 6px', borderRadius: 4, border: '1px solid var(--border-input)' }}
+                      >
+                        <option value="">Reassign to…</option>
+                        {eligible.map(u => (
+                          <option key={u.id} value={u.id}>{u.username}</option>
+                        ))}
+                      </select>
+                      <div style={{ display: 'flex', gap: 6 }}>
+                        <button
+                          onClick={() => handleReassign(m.id)}
+                          disabled={!reassignTarget || reassigning}
+                          style={{ fontSize: 11, padding: '3px 10px', background: '#2563eb', color: '#fff', border: 'none', borderRadius: 4, cursor: (!reassignTarget || reassigning) ? 'not-allowed' : 'pointer' }}
+                        >
+                          {reassigning ? 'Saving…' : 'Confirm'}
+                        </button>
+                        <button
+                          onClick={() => { setReassigningMemberId(null); setReassignTarget(''); }}
+                          style={{ fontSize: 11, padding: '3px 10px', background: 'var(--surface-alt)', color: 'var(--text-primary)', border: '1px solid var(--border-input)', borderRadius: 4, cursor: 'pointer' }}
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <button
+                      onClick={() => { setReassigningMemberId(m.id); setReassignTarget(''); }}
+                      style={{ marginTop: 8, fontSize: 11, padding: '3px 10px', background: 'none', color: 'var(--text-muted)', border: '1px solid var(--border-input)', borderRadius: 4, cursor: 'pointer' }}
+                    >
+                      Reassign
+                    </button>
+                  )
+                )}
               </div>
-              <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 4 }}>{m.username}</div>
-              <span style={{
-                padding: '2px 8px',
-                borderRadius: 20,
-                fontSize: 11,
-                fontWeight: 600,
-                background: m.status === 'submitted' ? 'var(--success-bg)' : m.status === 'in_progress' ? 'var(--warning-bg)' : 'var(--surface-alt)',
-                color: m.status === 'submitted' ? 'var(--success)' : m.status === 'in_progress' ? 'var(--warning-text)' : 'var(--text-muted)',
-              }}>
-                {m.status.replace('_', ' ')}
-              </span>
-              {m.reassigned_from && (
-                <div style={{ fontSize: 10, color: 'var(--text-disabled)', marginTop: 4 }}>reassigned</div>
-              )}
-            </div>
-          ))}
+            );
+          })}
         </div>
       </div>
 

@@ -2276,13 +2276,24 @@ async def reassign_member(task_id: int, member_id: int, body: ReassignRequest, r
     if conflict:
         raise HTTPException(status_code=400, detail="That user already holds a role on this stem")
 
-    await pool.execute(
-        """UPDATE group_annotation_members
-           SET reassigned_from = user_id, reassigned_at = now(), user_id = $1,
-               status = 'pending', started_at = NULL
-           WHERE id = $2""",
-        body.user_id, member_id
-    )
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            await conn.execute(
+                """UPDATE group_annotation_members
+                   SET reassigned_from = user_id, reassigned_at = now(), user_id = $1,
+                       status = 'pending', started_at = NULL, completed_at = NULL
+                   WHERE id = $2""",
+                body.user_id, member_id
+            )
+            # The new assignee starts clean — the previous person's in-progress
+            # positions and matrix overrides don't carry over. (Nothing to
+            # clear for an event annotator: spans belong to the task, not to
+            # a member row, so there's no per-person state to wipe there.)
+            if member["role"] == "timeline_annotator":
+                await conn.execute("DELETE FROM timeline_annotations WHERE member_id = $1", member_id)
+                await conn.execute("DELETE FROM timeline_relations WHERE member_id = $1", member_id)
+                await conn.execute("DELETE FROM timeline_relation_matrices WHERE member_id = $1", member_id)
+
     return await _get_group_task_detail(pool, task_id, viewer_user_id=user["id"])
 
 
