@@ -50,6 +50,23 @@ def generate_csrf() -> str:
     return secrets.token_urlsafe(32)
 
 
+import time
+
+# In-memory session cache: token -> (user_dict, session_dict, expire_monotonic)
+_SESSION_CACHE: dict[str, tuple[dict, dict, float]] = {}
+_CACHE_TTL_SECONDS = 60.0
+
+
+def invalidate_session_cache(token: Optional[str] = None, user_id: Optional[int] = None) -> None:
+    """Invalidate session cache on logout or user role updates."""
+    if token and token in _SESSION_CACHE:
+        _SESSION_CACHE.pop(token, None)
+    elif user_id:
+        to_del = [t for t, (u, s, exp) in _SESSION_CACHE.items() if u["id"] == user_id]
+        for t in to_del:
+            _SESSION_CACHE.pop(t, None)
+
+
 # ---------------------------------------------------------------------------
 # Session helpers
 # ---------------------------------------------------------------------------
@@ -67,18 +84,56 @@ async def create_session(user_id: int) -> tuple[str, str, datetime]:
     return token, csrf_token, expires_at
 
 
-async def get_session(token: str) -> Optional[dict]:
+async def get_session_and_user(token: str) -> Optional[tuple[dict, dict]]:
+    """Single-query JOIN to fetch session and user, backed by an in-memory cache."""
     if not token:
         return None
+    now_mono = time.monotonic()
+    cached = _SESSION_CACHE.get(token)
+    if cached:
+        user_data, session_data, exp = cached
+        if exp > now_mono:
+            return user_data, session_data
+        _SESSION_CACHE.pop(token, None)
+
     pool = await get_pool()
     row = await pool.fetchrow(
-        "SELECT * FROM auth_sessions WHERE token = $1 AND expires_at > now()",
+        """
+        SELECT s.id AS session_id, s.token, s.csrf_token, s.expires_at, s.user_id,
+               u.id AS user_id, u.email, u.username, COALESCE(u.role, 'annotator') AS role, u.created_at AS user_created_at
+        FROM auth_sessions s
+        JOIN users u ON u.id = s.user_id
+        WHERE s.token = $1 AND s.expires_at > now()
+        """,
         token
     )
-    return dict(row) if row else None
+    if not row:
+        return None
+    session_data = {
+        "id": row["session_id"],
+        "token": row["token"],
+        "csrf_token": row["csrf_token"],
+        "expires_at": row["expires_at"],
+        "user_id": row["user_id"],
+    }
+    user_data = {
+        "id": row["user_id"],
+        "email": row["email"],
+        "username": row["username"],
+        "role": row["role"],
+        "created_at": row["user_created_at"],
+    }
+    _SESSION_CACHE[token] = (user_data, session_data, now_mono + _CACHE_TTL_SECONDS)
+    return user_data, session_data
+
+
+async def get_session(token: str) -> Optional[dict]:
+    res = await get_session_and_user(token)
+    return res[1] if res else None
 
 
 async def delete_session(token: str) -> None:
+    invalidate_session_cache(token=token)
     pool = await get_pool()
     await pool.execute("DELETE FROM auth_sessions WHERE token = $1", token)
 
@@ -103,16 +158,14 @@ async def get_current_user(
     request: Request,
     token: Optional[str] = None,
 ) -> dict:
-    """Return current user dict or raise 401."""
+    """Return current user dict or raise 401 using single JOIN / cache."""
     raw_token = token or await cookie_scheme(request)
     if not raw_token:
         raise HTTPException(status_code=401, detail="Not authenticated")
-    session = await get_session(raw_token)
-    if not session:
+    res = await get_session_and_user(raw_token)
+    if not res:
         raise HTTPException(status_code=401, detail="Session expired or invalid")
-    user = await get_user_by_id(session["user_id"])
-    if not user:
-        raise HTTPException(status_code=401, detail="User not found")
+    user, session = res
     request.state.user = user
     request.state.session = session
     return user
@@ -143,12 +196,10 @@ async def get_current_user_optional(request: Request) -> Optional[dict]:
     raw_token = await cookie_scheme(request)
     if not raw_token:
         return None
-    session = await get_session(raw_token)
-    if not session:
+    res = await get_session_and_user(raw_token)
+    if not res:
         return None
-    user = await get_user_by_id(session["user_id"])
-    if not user:
-        return None
+    user, session = res
     request.state.user = user
     request.state.session = session
     return user

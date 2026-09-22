@@ -244,7 +244,7 @@ class ConflictResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 class ReviewDecisionRequest(BaseModel):
-    decision: str  # 'accept' | 're-evaluate' | 'blacklist'
+    decision: str  # 'accept' | 're-evaluate' | 'blacklist' | 'release_to_pool'
     comment: Optional[str] = None
 
 

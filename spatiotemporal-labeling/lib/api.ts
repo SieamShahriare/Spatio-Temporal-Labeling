@@ -1,6 +1,6 @@
 // API helper — all calls go to NEXT_PUBLIC_API_URL (FastAPI backend)
 
-import type { LLMLabelAndTimelineResponse } from '@/lib/types';
+import type { LLMLabelAndTimelineResponse, ReviewDecisionRequest } from '@/lib/types';
 
 const BASE = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000';
 
@@ -190,7 +190,7 @@ export const listPendingReviews = () =>
 
 export const reviewBatchStem = (
   batchStemId: number,
-  data: { decision: 'accept' | 're-evaluate' | 'blacklist'; comment?: string }
+  data: ReviewDecisionRequest
 ) => apiFetch(`/batch-stems/${batchStemId}/review`, { method: 'POST', body: JSON.stringify(data) });
 
 export const getStemReviews = (batchStemId: number) =>

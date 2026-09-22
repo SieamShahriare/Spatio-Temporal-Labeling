@@ -265,7 +265,6 @@ export default function AnnotateBatchStemPage() {
     if (!confirm(confirmMsg)) return;
     setSaving(true);
     try {
-      await saveBatchMatrix(stemId);
       await submitBatchStemForReview(stemId);
       router.push(`/batches/${batchId}`);
     } catch (e: unknown) {
@@ -279,7 +278,7 @@ export default function AnnotateBatchStemPage() {
     }
   }, [stem, stemId, batchId, spans, router]);
 
-  const handleReview = useCallback(async (decision: 'accept' | 're-evaluate' | 'blacklist', comment?: string) => {
+  const handleReview = useCallback(async (decision: 'accept' | 're-evaluate' | 'blacklist' | 'release_to_pool', comment?: string) => {
     setReviewing(true);
     setError('');
     try {

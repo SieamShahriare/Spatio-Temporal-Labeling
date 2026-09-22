@@ -238,7 +238,7 @@ export interface StemReview {
   stem_id: number;
   reviewer_id: number;
   reviewer_username: string;
-  decision: 'accept' | 're-evaluate' | 'blacklist';
+  decision: 'accept' | 're-evaluate' | 'blacklist' | 'release_to_pool';
   comment: string | null;
   created_at: string;
 }
@@ -260,7 +260,7 @@ export interface PendingReviewItem {
 }
 
 export interface ReviewDecisionRequest {
-  decision: 'accept' | 're-evaluate' | 'blacklist';
+  decision: 'accept' | 're-evaluate' | 'blacklist' | 'release_to_pool';
   comment?: string;
 }
 

@@ -10,7 +10,7 @@ interface ReviewControlsProps {
   annotatorUsername?: string;
   status: string;
   reviews?: StemReview[];
-  onReview: (decision: 'accept' | 're-evaluate' | 'blacklist', comment?: string) => Promise<void>;
+  onReview: (decision: 'accept' | 're-evaluate' | 'blacklist' | 'release_to_pool', comment?: string) => Promise<void>;
   submitting: boolean;
 }
 
@@ -34,10 +34,12 @@ export default function ReviewControls({
 }: ReviewControlsProps) {
   const [showMethodology, setShowMethodology] = useState(false);
   const [showReevalModal, setShowReevalModal] = useState(false);
+  const [showReleaseModal, setShowReleaseModal] = useState(false);
   const [showBlacklistModal, setShowBlacklistModal] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
 
   const [comment, setComment] = useState('');
+  const [releaseReason, setReleaseReason] = useState('');
   const [blacklistReason, setBlacklistReason] = useState('');
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
 
@@ -67,6 +69,18 @@ export default function ReviewControls({
     setShowReevalModal(false);
     setComment('');
     setSelectedTags([]);
+  };
+
+  const handleReleaseSubmit = async () => {
+    const reason = releaseReason.trim();
+    if (!reason) {
+      alert('Please provide a reason why this stem is being released for re-annotation by other annotators.');
+      return;
+    }
+    if (!confirm('Clear all existing annotations for this stem and release it to the public pool so other annotators can try?')) return;
+    await onReview('release_to_pool', reason);
+    setShowReleaseModal(false);
+    setReleaseReason('');
   };
 
   const handleBlacklistSubmit = async () => {
@@ -185,6 +199,27 @@ export default function ReviewControls({
               }}
             >
               ↺ Request Re-evaluate
+            </button>
+
+            <button
+              onClick={() => setShowReleaseModal(true)}
+              disabled={submitting}
+              style={{
+                padding: '7px 14px',
+                background: '#4b5563',
+                color: '#fff',
+                border: 'none',
+                borderRadius: 6,
+                cursor: submitting ? 'not-allowed' : 'pointer',
+                fontWeight: 600,
+                fontSize: 13,
+                display: 'flex',
+                alignItems: 'center',
+                gap: 4,
+              }}
+              title="Clear failed annotations and release stem to the public pool for other annotators to try"
+            >
+              ↩ Release to Pool (Re-annotate)
             </button>
 
             <button
@@ -398,6 +433,94 @@ export default function ReviewControls({
         </div>
       )}
 
+      {/* Release to Pool Modal */}
+      {showReleaseModal && (
+        <div style={{
+          position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000,
+        }}>
+          <div style={{
+            background: 'var(--surface)',
+            border: '1px solid var(--border)',
+            borderRadius: 12,
+            padding: 24,
+            maxWidth: 520,
+            width: '90%',
+          }}>
+            <h3 style={{ fontSize: 16, fontWeight: 700, margin: '0 0 8px', color: '#b45309' }}>
+              Release Stem to Pool (Re-annotate)
+            </h3>
+            <p style={{ fontSize: 13, color: 'var(--text-muted)', margin: '0 0 12px' }}>
+              If the current annotator failed to properly annotate this stem, you can release it back to the public pool.
+            </p>
+            <div style={{
+              background: '#fef3c7',
+              border: '1px solid #fde68a',
+              borderRadius: 6,
+              padding: '10px 12px',
+              marginBottom: 16,
+              fontSize: 12,
+              color: '#92400e',
+            }}>
+              <strong>⚠️ Warning:</strong> This will delete all existing spans, timeline placements, and matrix relations for this stem. It will become immediately available in the public pool for other annotators to try.
+            </div>
+
+            <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-muted)', display: 'block', marginBottom: 6 }}>
+              REASON / FEEDBACK (Required):
+            </label>
+            <textarea
+              value={releaseReason}
+              onChange={e => setReleaseReason(e.target.value)}
+              placeholder="Explain why the current annotation failed and what new annotators should focus on..."
+              rows={3}
+              style={{
+                width: '100%',
+                padding: '8px 12px',
+                border: '1px solid var(--border-input)',
+                borderRadius: 6,
+                fontSize: 13,
+                fontFamily: 'inherit',
+                boxSizing: 'border-box',
+                marginBottom: 16,
+                resize: 'vertical',
+              }}
+            />
+
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+              <button
+                onClick={() => setShowReleaseModal(false)}
+                disabled={submitting}
+                style={{
+                  padding: '7px 14px',
+                  background: 'var(--surface-alt)',
+                  border: '1px solid var(--border)',
+                  borderRadius: 6,
+                  cursor: 'pointer',
+                  fontSize: 13,
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleReleaseSubmit}
+                disabled={submitting}
+                style={{
+                  padding: '7px 18px',
+                  background: '#d97706',
+                  color: '#fff',
+                  border: 'none',
+                  borderRadius: 6,
+                  cursor: submitting ? 'not-allowed' : 'pointer',
+                  fontWeight: 600,
+                  fontSize: 13,
+                }}
+              >
+                {submitting ? 'Releasing…' : 'Confirm & Release to Pool'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* History Modal */}
       {showHistory && (
         <div style={{
@@ -429,11 +552,11 @@ export default function ReviewControls({
                   <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
                     <span style={{
                       fontWeight: 700,
-                      color: r.decision === 'accept' ? '#15803d' : r.decision === 'blacklist' ? '#dc2626' : '#d97706',
+                      color: r.decision === 'accept' ? '#15803d' : r.decision === 'blacklist' ? '#dc2626' : r.decision === 'release_to_pool' ? '#4b5563' : '#d97706',
                       textTransform: 'uppercase',
                       fontSize: 12,
                     }}>
-                      {r.decision}
+                      {r.decision.replace('_', ' ')}
                     </span>
                     <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
                       by {r.reviewer_username} · {new Date(r.created_at).toLocaleString()}

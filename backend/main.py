@@ -33,7 +33,7 @@ from auth import (
     create_session, get_session, delete_session as delete_auth_session, get_user_by_id,
     set_session_cookies, clear_session_cookies,
     get_current_user, get_current_user_optional, validate_csrf,
-    require_reviewer, require_admin,
+    require_reviewer, require_admin, invalidate_session_cache,
 )
 from allen.relations import build_matrix, RELATION_NAMES, INVERSES
 from allen.validate import transitivity_check
@@ -314,16 +314,19 @@ async def save_matrix(session_id: int):
             session_id, json.dumps(matrix), json.dumps(span_order)
         )
 
-    for i, si in enumerate(span_list):
-        for j, sj in enumerate(span_list):
-            code = matrix[i][j]
-            await pool.execute(
-                """INSERT INTO relations (session_id, span_i_id, span_j_id, relation_code)
-                   VALUES ($1,$2,$3,$4)
-                   ON CONFLICT (session_id, span_i_id, span_j_id) WHERE session_id IS NOT NULL
-                   DO UPDATE SET relation_code=$4""",
-                session_id, si["id"], sj["id"], code
-            )
+    records = [
+        (session_id, si["id"], sj["id"], matrix[i][j])
+        for i, si in enumerate(span_list)
+        for j, sj in enumerate(span_list)
+    ]
+    if records:
+        await pool.executemany(
+            """INSERT INTO relations (session_id, span_i_id, span_j_id, relation_code)
+               VALUES ($1, $2, $3, $4)
+               ON CONFLICT (session_id, span_i_id, span_j_id) WHERE session_id IS NOT NULL
+               DO UPDATE SET relation_code = EXCLUDED.relation_code""",
+            records
+        )
 
     return {"ok": True, "matrix": matrix, "span_order": span_order}
 
@@ -543,6 +546,7 @@ async def update_user_role(user_id: int, body: UserRoleUpdate, request: Request,
     )
     if not updated:
         raise HTTPException(status_code=404, detail="User not found")
+    invalidate_session_cache(user_id=user_id)
     return {"ok": True, "user": UserOut(**dict(updated)).model_dump()}
 
 
@@ -650,7 +654,7 @@ async def list_stems(
             WHERE bs.stem_id = s.id
               AND b.expires_at > now()
               AND b.status = 'active'
-              AND bs.status NOT IN ('done', 'pending-review', 'blacklisted')
+              AND bs.status NOT IN ('done', 'pending-review', 'blacklisted', 'released')
             ORDER BY b.expires_at DESC LIMIT 1
         ) act ON true
         LEFT JOIN LATERAL (
@@ -702,7 +706,7 @@ async def list_stems(
             WHERE bs.stem_id = s.id
               AND b.expires_at > now()
               AND b.status = 'active'
-              AND bs.status NOT IN ('done', 'pending-review', 'blacklisted')
+              AND bs.status NOT IN ('done', 'pending-review', 'blacklisted', 'released')
             ORDER BY b.expires_at DESC LIMIT 1
         ) act ON true
         LEFT JOIN LATERAL (
@@ -922,7 +926,7 @@ async def create_batch(body: BatchCreate, request: Request, user=Depends(get_cur
                 JOIN batches b ON b.id = bs.batch_id
                 WHERE (
                     bs.status = 'pending-review'
-                    OR (b.expires_at > now() AND b.status = 'active' AND bs.status NOT IN ('done', 'blacklisted'))
+                    OR (b.expires_at > now() AND b.status = 'active' AND bs.status NOT IN ('done', 'blacklisted', 'released'))
                 )
                 AND bs.stem_id = ANY($1::int[])
                 FOR UPDATE
@@ -948,11 +952,10 @@ async def create_batch(body: BatchCreate, request: Request, user=Depends(get_cur
                 body.name, user["id"], now, expires
             )
             batch = dict(batch_row)
-            for stem_id in body.stem_ids:
-                await conn.execute(
-                    "INSERT INTO batch_stems (batch_id, stem_id, status) VALUES ($1, $2, 'not_started')",
-                    batch["id"], stem_id
-                )
+            await conn.execute(
+                "INSERT INTO batch_stems (batch_id, stem_id, status) SELECT $1, unnest($2::int[]), 'not_started'",
+                batch["id"], body.stem_ids
+            )
 
     return BatchOut(
         id=batch["id"],
@@ -974,23 +977,29 @@ async def list_batches(request: Request):
     user = await get_current_user(request)
     pool = await get_pool()
     rows = await pool.fetch(
-        "SELECT * FROM batches WHERE owner_id = $1 ORDER BY created_at DESC",
+        """
+        SELECT b.*,
+               COALESCE(p.total, 0) AS total,
+               COALESCE(p.done, 0) AS done,
+               COALESCE(p.pending_review, 0) AS pending_review,
+               COALESCE(p.re_evaluate, 0) AS re_evaluate
+        FROM batches b
+        LEFT JOIN (
+            SELECT batch_id,
+                   COUNT(*) AS total,
+                   COUNT(*) FILTER (WHERE status = 'done') AS done,
+                   COUNT(*) FILTER (WHERE status = 'pending-review') AS pending_review,
+                   COUNT(*) FILTER (WHERE status = 're-evaluate') AS re_evaluate
+            FROM batch_stems
+            GROUP BY batch_id
+        ) p ON p.batch_id = b.id
+        WHERE b.owner_id = $1
+        ORDER BY b.created_at DESC
+        """,
         user["id"]
     )
     result = []
     for r in rows:
-        total = await pool.fetchval(
-            "SELECT COUNT(*) FROM batch_stems WHERE batch_id = $1", r["id"]
-        )
-        done = await pool.fetchval(
-            "SELECT COUNT(*) FROM batch_stems WHERE batch_id = $1 AND status = 'done'", r["id"]
-        )
-        pending_review = await pool.fetchval(
-            "SELECT COUNT(*) FROM batch_stems WHERE batch_id = $1 AND status = 'pending-review'", r["id"]
-        )
-        re_evaluate = await pool.fetchval(
-            "SELECT COUNT(*) FROM batch_stems WHERE batch_id = $1 AND status = 're-evaluate'", r["id"]
-        )
         result.append(BatchOut(
             id=r["id"],
             name=r["name"],
@@ -1002,7 +1011,12 @@ async def list_batches(request: Request):
             rebook_count=r["rebook_count"],
             status=r["status"],
             remaining_seconds=_seconds_until(r["expires_at"]),
-            progress={"done": done, "total": total, "pending_review": pending_review, "re_evaluate": re_evaluate},
+            progress={
+                "done": r["done"],
+                "total": r["total"],
+                "pending_review": r["pending_review"],
+                "re_evaluate": r["re_evaluate"]
+            },
         ))
     return result
 
@@ -1346,16 +1360,19 @@ async def save_batch_matrix(batch_stem_id: int, request: Request, user=Depends(g
             batch_stem_id, json.dumps(matrix), json.dumps(span_order)
         )
 
-    for i, si in enumerate(span_list):
-        for j, sj in enumerate(span_list):
-            code = matrix[i][j]
-            await pool.execute(
-                """INSERT INTO relations (batch_stem_id, span_i_id, span_j_id, relation_code)
-                   VALUES ($1,$2,$3,$4)
-                   ON CONFLICT (batch_stem_id, span_i_id, span_j_id) WHERE batch_stem_id IS NOT NULL
-                   DO UPDATE SET relation_code=$4""",
-                batch_stem_id, si["id"], sj["id"], code
-            )
+    records = [
+        (batch_stem_id, si["id"], sj["id"], matrix[i][j])
+        for i, si in enumerate(span_list)
+        for j, sj in enumerate(span_list)
+    ]
+    if records:
+        await pool.executemany(
+            """INSERT INTO relations (batch_stem_id, span_i_id, span_j_id, relation_code)
+               VALUES ($1, $2, $3, $4)
+               ON CONFLICT (batch_stem_id, span_i_id, span_j_id) WHERE batch_stem_id IS NOT NULL
+               DO UPDATE SET relation_code = EXCLUDED.relation_code""",
+            records
+        )
 
     return {"ok": True, "matrix": matrix, "span_order": span_order}
 
@@ -1482,16 +1499,19 @@ async def submit_batch_stem_for_review(batch_stem_id: int, request: Request, use
             batch_stem_id, json.dumps(matrix), json.dumps(span_order)
         )
 
-    for i, si in enumerate(span_list):
-        for j, sj in enumerate(span_list):
-            code = matrix[i][j]
-            await pool.execute(
-                """INSERT INTO relations (batch_stem_id, span_i_id, span_j_id, relation_code)
-                   VALUES ($1,$2,$3,$4)
-                   ON CONFLICT (batch_stem_id, span_i_id, span_j_id) WHERE batch_stem_id IS NOT NULL
-                   DO UPDATE SET relation_code=$4""",
-                batch_stem_id, si["id"], sj["id"], code
-            )
+    records = [
+        (batch_stem_id, si["id"], sj["id"], matrix[i][j])
+        for i, si in enumerate(span_list)
+        for j, sj in enumerate(span_list)
+    ]
+    if records:
+        await pool.executemany(
+            """INSERT INTO relations (batch_stem_id, span_i_id, span_j_id, relation_code)
+               VALUES ($1, $2, $3, $4)
+               ON CONFLICT (batch_stem_id, span_i_id, span_j_id) WHERE batch_stem_id IS NOT NULL
+               DO UPDATE SET relation_code = EXCLUDED.relation_code""",
+            records
+        )
 
     await pool.execute(
         "UPDATE batch_stems SET status = 'pending-review', updated_at = now() WHERE id = $1",
@@ -1570,10 +1590,10 @@ async def review_batch_stem(
         raise HTTPException(status_code=404, detail="Batch stem not found")
 
     decision = body.decision.lower()
-    if decision not in ("accept", "re-evaluate", "blacklist"):
-        raise HTTPException(status_code=400, detail="Decision must be 'accept', 're-evaluate', or 'blacklist'")
+    if decision not in ("accept", "re-evaluate", "blacklist", "release_to_pool"):
+        raise HTTPException(status_code=400, detail="Decision must be 'accept', 're-evaluate', 'blacklist', or 'release_to_pool'")
 
-    if decision in ("re-evaluate", "blacklist") and (not body.comment or not body.comment.strip()):
+    if decision in ("re-evaluate", "blacklist", "release_to_pool") and (not body.comment or not body.comment.strip()):
         raise HTTPException(status_code=400, detail=f"Comment is required when decision is '{decision}'")
 
     comment = body.comment.strip() if body.comment else None
@@ -1616,6 +1636,20 @@ async def review_batch_stem(
                     """,
                     comment, reviewer["id"], bs["stem_id"]
                 )
+            elif decision == "release_to_pool":
+                # Delete all previous failed/unacceptable annotations so the new annotator starts fresh
+                await conn.execute("DELETE FROM relations WHERE batch_stem_id = $1", batch_stem_id)
+                await conn.execute("DELETE FROM matrix_snapshots WHERE batch_stem_id = $1", batch_stem_id)
+                await conn.execute("DELETE FROM spans WHERE batch_stem_id = $1", batch_stem_id)
+                # Release this batch_stem so it is freed from the current batch and public pool reclaims it
+                await conn.execute(
+                    """
+                    UPDATE batch_stems
+                    SET status = 'released', reviewer_id = $1, reviewed_at = now(), updated_at = now()
+                    WHERE id = $2
+                    """,
+                    reviewer["id"], batch_stem_id
+                )
 
             await conn.execute(
                 """
@@ -1625,7 +1659,7 @@ async def review_batch_stem(
                 batch_stem_id, bs["stem_id"], reviewer["id"], decision, comment
             )
 
-    return {"ok": True, "decision": decision, "status": "done" if decision == "accept" else decision}
+    return {"ok": True, "decision": decision, "status": "done" if decision == "accept" else "released" if decision == "release_to_pool" else decision}
 
 
 @app.get("/batch-stems/{batch_stem_id}/reviews")
@@ -1698,30 +1732,27 @@ async def export_batch_csv(batch_id: int, request: Request):
     batch = await pool.fetchrow("SELECT * FROM batches WHERE id=$1 AND owner_id=$2", batch_id, user["id"])
     if not batch:
         raise HTTPException(status_code=404, detail="Batch not found")
-    bs_list = await pool.fetch("SELECT id FROM batch_stems WHERE batch_id=$1 AND status='done'", batch_id)
     output = io.StringIO()
     writer = csv.writer(output)
     writer.writerow(["batch_id", "batch_name", "stem_id", "stem_text", "span_i", "span_j",
                      "relation_code", "relation_name", "is_override"])
-    for bs in bs_list:
-        spans = await pool.fetch("SELECT * FROM spans WHERE batch_stem_id=$1", bs["id"])
-        relations = await pool.fetch(
-            """SELECT r.*, si.seq_label as label_i, sj.seq_label as label_j
-               FROM relations r
-               JOIN spans si ON r.span_i_id = si.id
-               JOIN spans sj ON r.span_j_id = sj.id
-               WHERE r.batch_stem_id=$1""",
-            bs["id"]
-        )
-        stem_row = await pool.fetchrow("SELECT text FROM stems WHERE id=(SELECT stem_id FROM batch_stems WHERE id=$1)", bs["id"])
-        stem_text = stem_row["text"] if stem_row else ""
-        for r in relations:
-            writer.writerow([
-                batch_id, batch["name"], bs["id"], stem_text[:80],
-                r["label_i"], r["label_j"], r["relation_code"],
-                RELATION_NAMES.get(r["relation_code"], "unknown"),
-                r["is_override"]
-            ])
+    relations = await pool.fetch(
+        """SELECT r.*, si.seq_label as label_i, sj.seq_label as label_j, s.text as stem_text, bs.id as batch_stem_id
+           FROM relations r
+           JOIN batch_stems bs ON bs.id = r.batch_stem_id
+           JOIN stems s ON s.id = bs.stem_id
+           JOIN spans si ON r.span_i_id = si.id
+           JOIN spans sj ON r.span_j_id = sj.id
+           WHERE bs.batch_id = $1 AND bs.status = 'done'""",
+        batch_id
+    )
+    for r in relations:
+        writer.writerow([
+            batch_id, batch["name"], r["batch_stem_id"], r["stem_text"][:80],
+            r["label_i"], r["label_j"], r["relation_code"],
+            RELATION_NAMES.get(r["relation_code"], "unknown"),
+            r["is_override"]
+        ])
     output.seek(0)
     return StreamingResponse(
         iter([output.getvalue()]),
@@ -1752,17 +1783,33 @@ async def export_batch_json(batch_id: int, request: Request):
         "status": batch["status"],
         "stems": []
     }
-    for bs in bs_list:
-        spans = await pool.fetch("SELECT * FROM spans WHERE batch_stem_id=$1 ORDER BY created_at", bs["id"])
-        snapshot = await pool.fetchrow(
-            "SELECT * FROM matrix_snapshots WHERE batch_stem_id=$1 ORDER BY updated_at DESC LIMIT 1",
-            bs["id"]
+    bs_ids = [bs["id"] for bs in bs_list]
+    spans_by_bs: dict[int, list] = {bs_id: [] for bs_id in bs_ids}
+    snapshots_by_bs: dict[int, dict] = {}
+    if bs_ids:
+        all_spans = await pool.fetch(
+            "SELECT * FROM spans WHERE batch_stem_id = ANY($1::int[]) ORDER BY created_at",
+            bs_ids
         )
+        for sp in all_spans:
+            spans_by_bs[sp["batch_stem_id"]].append({k: _serialize(v) for k, v in dict(sp).items()})
+
+        all_snapshots = await pool.fetch(
+            """SELECT DISTINCT ON (batch_stem_id) * FROM matrix_snapshots
+               WHERE batch_stem_id = ANY($1::int[])
+               ORDER BY batch_stem_id, updated_at DESC""",
+            bs_ids
+        )
+        for sn in all_snapshots:
+            snapshots_by_bs[sn["batch_stem_id"]] = sn
+
+    for bs in bs_list:
+        snapshot = snapshots_by_bs.get(bs["id"])
         batch_data["stems"].append({
             "batch_stem_id": bs["id"],
             "stem_id": bs["stem_id"],
             "stem_text": bs["stem_text"],
-            "spans": [{k: _serialize(v) for k, v in dict(sp).items()} for sp in spans],
+            "spans": spans_by_bs.get(bs["id"], []),
             "matrix": json.loads(snapshot["matrix_json"]) if snapshot else [],
             "span_order": json.loads(snapshot["span_order"]) if snapshot else [],
         })
@@ -2114,18 +2161,37 @@ async def llm_label_and_timeline(body: LLMLabelAndTimelineRequest, request: Requ
                 "SELECT * FROM spans WHERE batch_stem_id = $1 ORDER BY created_at", batch_stem_id
             )
             event_count = sum(1 for s in existing if s["label_type"] == "Event")
-            created_spans = []
+            span_insert_data = []
             for event in accepted_events:
                 event_count += 1
                 seq_label = f"E{event_count}"
-                row = await conn.fetchrow(
-                    """INSERT INTO spans (batch_stem_id, label_type, seq_label, span_text, char_start, char_end, tl_start, tl_end, source)
-                       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *""",
+                span_insert_data.append((
                     batch_stem_id, "Event", seq_label,
                     event["span_text"], event["char_start"], event["char_end"],
                     10.0, 30.0, "llm"
+                ))
+
+            if span_insert_data:
+                rows = await conn.fetch(
+                    """INSERT INTO spans (batch_stem_id, label_type, seq_label, span_text, char_start, char_end, tl_start, tl_end, source)
+                       SELECT x.bs_id, x.lt, x.sl, x.st, x.cs, x.ce, x.ts, x.te, x.src
+                       FROM unnest(
+                           $1::int[], $2::text[], $3::text[], $4::text[], $5::int[], $6::int[], $7::float8[], $8::float8[], $9::text[]
+                       ) AS x(bs_id, lt, sl, st, cs, ce, ts, te, src)
+                       RETURNING *""",
+                    [d[0] for d in span_insert_data],
+                    [d[1] for d in span_insert_data],
+                    [d[2] for d in span_insert_data],
+                    [d[3] for d in span_insert_data],
+                    [d[4] for d in span_insert_data],
+                    [d[5] for d in span_insert_data],
+                    [d[6] for d in span_insert_data],
+                    [d[7] for d in span_insert_data],
+                    [d[8] for d in span_insert_data],
                 )
-                created_spans.append(dict(row))
+                created_spans = [dict(r) for r in rows]
+            else:
+                created_spans = []
 
             all_event_rows = await conn.fetch(
                 "SELECT * FROM spans WHERE batch_stem_id = $1 AND label_type = 'Event' ORDER BY created_at",
@@ -2174,6 +2240,7 @@ async def llm_label_and_timeline(body: LLMLabelAndTimelineRequest, request: Requ
 
             timeline_updated = []
             timeline_skipped = []
+            to_update_positions = []
 
             for r in all_event_rows:
                 span_id = r["id"]
@@ -2194,10 +2261,8 @@ async def llm_label_and_timeline(body: LLMLabelAndTimelineRequest, request: Requ
                     end = round(avg + MIN_WIDTH / 2, 1)
                 elif end == start:
                     end = round(start + MIN_WIDTH, 1)
-                await conn.execute(
-                    "UPDATE spans SET tl_start=$1, tl_end=$2, source='llm' WHERE id=$3",
-                    start, end, span_id
-                )
+
+                to_update_positions.append((start, end, span_id))
                 timeline_updated.append({
                     "span_id": span_id,
                     "seq_label": r["seq_label"],
@@ -2205,6 +2270,12 @@ async def llm_label_and_timeline(body: LLMLabelAndTimelineRequest, request: Requ
                     "tl_start": start,
                     "tl_end": end,
                 })
+
+            if to_update_positions:
+                await conn.executemany(
+                    "UPDATE spans SET tl_start=$1, tl_end=$2, source='llm' WHERE id=$3",
+                    to_update_positions
+                )
 
             return LLMLabelAndTimelineResponse(
                 events=accepted_events,
