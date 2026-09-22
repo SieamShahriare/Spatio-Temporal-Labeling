@@ -4,6 +4,7 @@ export interface User {
   id: number;
   email: string;
   username: string;
+  role: 'annotator' | 'reviewer' | 'admin';
   created_at: string;
 }
 
@@ -20,7 +21,8 @@ export interface Session {
 
 export interface Span {
   id: number;
-  session_id: number;
+  session_id?: number;
+  batch_stem_id?: number;
   label_type: 'Event' | 'Time';
   seq_label: string;
   span_text: string;
@@ -88,6 +90,7 @@ export interface SignupRequest {
   email: string;
   password: string;
   username: string;
+  role?: string;
 }
 
 export interface LoginRequest {
@@ -102,7 +105,7 @@ export interface AuthMeResponse {
 
 // ====== Stems types ======
 
-export type StemState = 'available' | 'booked' | 'completed';
+export type StemState = 'available' | 'booked' | 'pending-review' | 're-evaluate' | 'completed' | 'blacklisted';
 
 export interface StemOut {
   id: number;
@@ -113,6 +116,16 @@ export interface StemOut {
   locked_until: string | null;
   completed_by: { id: number; username: string } | null;
   completed_at: string | null;
+  is_blacklisted?: boolean;
+  blacklist_reason?: string | null;
+  blacklisted_by?: { id: number; username: string } | null;
+  blacklisted_at?: string | null;
+  latest_review?: {
+    decision: string;
+    comment: string | null;
+    reviewer_username: string;
+    created_at: string;
+  } | null;
 }
 
 export interface StemsListResponse {
@@ -142,7 +155,12 @@ export interface BatchOut {
   rebook_count: number;
   status: BatchStatus;
   remaining_seconds: number;
-  progress: { done: number; total: number };
+  progress: {
+    done: number;
+    total: number;
+    pending_review?: number;
+    re_evaluate?: number;
+  };
 }
 
 export interface BatchStemOut {
@@ -153,6 +171,14 @@ export interface BatchStemOut {
   status: string;
   completed_by: { id: number; username: string } | null;
   completed_at: string | null;
+  reviewer?: { id: number; username: string } | null;
+  reviewed_at?: string | null;
+  latest_review?: {
+    decision: string;
+    comment: string | null;
+    reviewer_username: string;
+    created_at: string;
+  } | null;
   updated_at: string | null;
 }
 
@@ -165,7 +191,7 @@ export interface BatchDetailOut extends BatchOut {
 export interface BatchSpanOut {
   id: number;
   batch_stem_id: number;
-  session_id: number;
+  session_id?: number;
   label_type: 'Event' | 'Time';
   seq_label: string;
   span_text: string;
@@ -180,15 +206,62 @@ export interface BatchSpanOut {
 export interface BatchStemDetail {
   id: number;
   batch_id: number;
+  batch_name?: string;
   stem_id: number;
   stem_text: string;
   word_count: number;
   status: string;
+  owner_id?: number;
+  owner_username?: string;
   completed_by: number | null;
   completed_at: string | null;
+  reviewer?: { id: number; username: string } | null;
+  reviewed_at?: string | null;
+  latest_review?: {
+    decision: string;
+    comment: string | null;
+    reviewer_username: string;
+    created_at: string;
+  } | null;
+  is_blacklisted?: boolean;
+  blacklist_reason?: string | null;
   updated_at: string | null;
   spans: BatchSpanOut[];
   expires_at: string;
+}
+
+// ====== Review types ======
+
+export interface StemReview {
+  id: number;
+  batch_stem_id: number;
+  stem_id: number;
+  reviewer_id: number;
+  reviewer_username: string;
+  decision: 'accept' | 're-evaluate' | 'blacklist';
+  comment: string | null;
+  created_at: string;
+}
+
+export interface PendingReviewItem {
+  batch_stem_id: number;
+  batch_id: number;
+  batch_name: string;
+  stem_id: number;
+  stem_text: string;
+  word_count: number;
+  annotator_id: number;
+  annotator_username: string;
+  status: string;
+  submitted_at: string | null;
+  updated_at: string | null;
+  event_count: number;
+  latest_comment: string | null;
+}
+
+export interface ReviewDecisionRequest {
+  decision: 'accept' | 're-evaluate' | 'blacklist';
+  comment?: string;
 }
 
 export interface SkippedEvent {

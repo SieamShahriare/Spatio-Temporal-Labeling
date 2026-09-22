@@ -180,6 +180,25 @@ export const overrideBatchMatrix = (batchStemId: number, i: number, j: number, r
 export const markBatchStemDone = (batchStemId: number) =>
   apiFetch(`/batch-stems/${batchStemId}/mark-done`, { method: 'POST' });
 
+export const submitBatchStemForReview = (batchStemId: number) =>
+  apiFetch(`/batch-stems/${batchStemId}/submit-for-review`, { method: 'POST' });
+
+// ====== Review API ======
+
+export const listPendingReviews = () =>
+  apiFetch('/reviews/pending');
+
+export const reviewBatchStem = (
+  batchStemId: number,
+  data: { decision: 'accept' | 're-evaluate' | 'blacklist'; comment?: string }
+) => apiFetch(`/batch-stems/${batchStemId}/review`, { method: 'POST', body: JSON.stringify(data) });
+
+export const getStemReviews = (batchStemId: number) =>
+  apiFetch(`/batch-stems/${batchStemId}/reviews`);
+
+export const updateUserRole = (userId: number, role: string) =>
+  apiFetch(`/admin/users/${userId}/role`, { method: 'PATCH', body: JSON.stringify({ role }) });
+
 // ====== Legacy (backward compat) ======
 
 export const createSession = (username: string, stem_text: string) =>

@@ -215,6 +215,12 @@ export default function BatchDetailPage() {
               </div>
               <span style={{ fontSize: 12, fontWeight: 600, fontFamily: 'monospace' }}>{batch.progress.done}/{batch.progress.total}</span>
             </div>
+            {(Boolean(batch.progress.pending_review) || Boolean(batch.progress.re_evaluate)) && (
+              <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>
+                {Boolean(batch.progress.pending_review) && <span style={{ color: '#8b5cf6', marginRight: 8 }}>● {batch.progress.pending_review} pending review</span>}
+                {Boolean(batch.progress.re_evaluate) && <span style={{ color: '#b45309' }}>● {batch.progress.re_evaluate} needs fix</span>}
+              </div>
+            )}
           </div>
           <div style={{ flex: '1 1 200px' }}>
             <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 4 }}>RE-BOOKS</div>
@@ -245,7 +251,7 @@ export default function BatchDetailPage() {
 
         {isExpired && batch.status !== 'released' && (
           <div style={{ marginTop: 16, padding: '10px 14px', background: 'var(--warning-bg)', borderRadius: 6, fontSize: 13, color: 'var(--warning-text)' }}>
-            This batch&apos;s lock has expired. Stems have returned to the pool. Completed work is still viewable.
+            This batch&apos;s lock has expired. Stems pending review or completed are preserved. Unfinished stems have returned to the pool.
           </div>
         )}
       </div>
@@ -256,8 +262,13 @@ export default function BatchDetailPage() {
         borderRadius: 10,
         overflow: 'hidden',
       }}>
-        <div style={{ padding: '12px 16px', background: 'var(--surface-alt)', borderBottom: '1px solid var(--border)', fontWeight: 600, fontSize: 13 }}>
-          STEMS ({batch.progress.done}/{batch.progress.total} done)
+        <div style={{ padding: '12px 16px', background: 'var(--surface-alt)', borderBottom: '1px solid var(--border)', fontWeight: 600, fontSize: 13, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <span>STEMS ({batch.progress.done}/{batch.progress.total} done)</span>
+          {(user?.role === 'reviewer' || user?.role === 'admin') && (
+            <span style={{ fontSize: 11, color: '#8b5cf6', background: 'rgba(139, 92, 246, 0.1)', padding: '2px 8px', borderRadius: 12, fontWeight: 600 }}>
+              Reviewer Mode Active
+            </span>
+          )}
         </div>
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
           <thead>
@@ -269,48 +280,113 @@ export default function BatchDetailPage() {
             </tr>
           </thead>
           <tbody>
-            {batch.stems.map(bs => (
-              <tr key={bs.id} style={{ borderBottom: '1px solid var(--border)' }}>
-                <td style={td}>{bs.stem_id}</td>
-                <td style={{ ...td, maxWidth: 400, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {bs.stem_text.slice(0, 100)}{bs.stem_text.length > 100 ? '…' : ''}
-                </td>
-                <td style={td}>
-                  <span style={{
-                    padding: '2px 8px',
-                    borderRadius: 20,
-                    fontSize: 11,
-                    fontWeight: 600,
-                    background: bs.status === 'done' ? 'var(--success-bg)' : bs.status === 'in_progress' ? 'var(--warning-bg)' : 'var(--surface-alt)',
-                    color: bs.status === 'done' ? 'var(--success)' : bs.status === 'in_progress' ? 'var(--warning-text)' : 'var(--text-muted)',
-                  }}>
-                    {bs.status.replace('_', ' ')}
-                  </span>
-                </td>
-                <td style={td}>
-                  <button
+            {batch.stems.map(bs => {
+              const isReviewer = user?.role === 'reviewer' || user?.role === 'admin';
+              let badgeBg = 'var(--surface-alt)';
+              let badgeColor = 'var(--text-muted)';
+              let statusLabel = bs.status.replace('_', ' ');
+
+              if (bs.status === 'done') {
+                badgeBg = 'var(--success-bg)';
+                badgeColor = 'var(--success)';
+                statusLabel = 'done';
+              } else if (bs.status === 'pending-review') {
+                badgeBg = 'rgba(139, 92, 246, 0.15)';
+                badgeColor = '#8b5cf6';
+                statusLabel = 'pending review';
+              } else if (bs.status === 're-evaluate') {
+                badgeBg = '#fef3c7';
+                badgeColor = '#b45309';
+                statusLabel = 'needs fix';
+              } else if (bs.status === 'blacklisted') {
+                badgeBg = '#fee2e2';
+                badgeColor = '#b91c1c';
+                statusLabel = 'blacklisted';
+              } else if (bs.status === 'in_progress') {
+                badgeBg = 'var(--warning-bg)';
+                badgeColor = 'var(--warning-text)';
+                statusLabel = 'in progress';
+              }
+
+              let actionLabel = 'Start';
+              let actionBg = '#2563eb';
+              let actionColor = '#fff';
+
+              if (isReviewer) {
+                actionLabel = bs.status === 'pending-review' ? 'Review' : 'View / Review';
+                actionBg = bs.status === 'pending-review' ? '#8b5cf6' : 'var(--surface-alt)';
+                actionColor = bs.status === 'pending-review' ? '#fff' : 'var(--text-primary)';
+              } else {
+                if (bs.status === 'done') {
+                  actionLabel = 'View';
+                  actionBg = 'var(--surface-alt)';
+                  actionColor = 'var(--text-primary)';
+                } else if (bs.status === 'pending-review') {
+                  actionLabel = 'View';
+                  actionBg = 'var(--surface-alt)';
+                  actionColor = 'var(--text-primary)';
+                } else if (bs.status === 're-evaluate') {
+                  actionLabel = 'Fix / Resubmit';
+                  actionBg = '#d97706';
+                  actionColor = '#fff';
+                } else if (bs.status === 'in_progress') {
+                  actionLabel = 'Continue';
+                  actionBg = '#2563eb';
+                  actionColor = '#fff';
+                } else if (bs.status === 'blacklisted') {
+                  actionLabel = 'View';
+                  actionBg = 'var(--surface-alt)';
+                  actionColor = 'var(--text-primary)';
+                }
+              }
+
+              return (
+                <tr key={bs.id} style={{ borderBottom: '1px solid var(--border)' }}>
+                  <td style={td}>{bs.stem_id}</td>
+                  <td style={{ ...td, maxWidth: 400, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {bs.stem_text.slice(0, 100)}{bs.stem_text.length > 100 ? '…' : ''}
+                  </td>
+                  <td style={td}>
+                    <span style={{
+                      padding: '2px 8px',
+                      borderRadius: 20,
+                      fontSize: 11,
+                      fontWeight: 600,
+                      background: badgeBg,
+                      color: badgeColor,
+                    }}>
+                      {statusLabel}
+                    </span>
+                  </td>
+                  <td style={td}>
+                    <button
                       onClick={() => {
-                        if (isExpired && bs.status !== 'done') {
-                          alert('This batch has expired. You can only review completed stems.');
+                        const canView = isReviewer || bs.status === 'done' || bs.status === 'pending-review' || bs.status === 'blacklisted';
+                        if (isExpired && !canView) {
+                          alert('This batch has expired. Only submitted, completed, or blacklisted stems can be viewed.');
                           return;
                         }
-                        router.push(`/annotate/${batch.id}/${bs.id}`);
+                        const url = isReviewer
+                          ? `/annotate/${batch.id}/${bs.id}?mode=review`
+                          : `/annotate/${batch.id}/${bs.id}`;
+                        router.push(url);
                       }}
-                    style={btnStyle('#2563eb', '#fff')}
-                  >
-                    {bs.status === 'done' ? 'Review' : bs.status === 'in_progress' ? 'Continue' : 'Start'}
-                  </button>
-                  <a
-                    href={exportBatchStemJson(bs.id)}
-                    download
-                    title="Download stem JSON"
-                    style={{ ...btnStyle('var(--surface-alt)', 'var(--text-primary)'), textDecoration: 'none', marginLeft: 6, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', lineHeight: 1 }}
-                  >
-                    ⬇
-                  </a>
-                </td>
-              </tr>
-            ))}
+                      style={btnStyle(actionBg, actionColor)}
+                    >
+                      {actionLabel}
+                    </button>
+                    <a
+                      href={exportBatchStemJson(bs.id)}
+                      download
+                      title="Download stem JSON"
+                      style={{ ...btnStyle('var(--surface-alt)', 'var(--text-primary)'), textDecoration: 'none', marginLeft: 6, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', lineHeight: 1 }}
+                    >
+                      ⬇
+                    </a>
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>

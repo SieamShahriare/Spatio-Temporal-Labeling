@@ -86,7 +86,7 @@ async def delete_session(token: str) -> None:
 async def get_user_by_id(user_id: int) -> Optional[dict]:
     pool = await get_pool()
     row = await pool.fetchrow(
-        "SELECT id, email, username, created_at FROM users WHERE id = $1",
+        "SELECT id, email, username, COALESCE(role, 'annotator') as role, created_at FROM users WHERE id = $1",
         user_id
     )
     return dict(row) if row else None
@@ -115,6 +115,26 @@ async def get_current_user(
         raise HTTPException(status_code=401, detail="User not found")
     request.state.user = user
     request.state.session = session
+    return user
+
+
+async def require_reviewer(
+    request: Request,
+) -> dict:
+    """Return current user if they have reviewer or admin role, else raise 403."""
+    user = await get_current_user(request)
+    if user.get("role") not in ("reviewer", "admin"):
+        raise HTTPException(status_code=403, detail="Reviewer or admin role required")
+    return user
+
+
+async def require_admin(
+    request: Request,
+) -> dict:
+    """Return current user if they have admin role, else raise 403."""
+    user = await get_current_user(request)
+    if user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin role required")
     return user
 
 

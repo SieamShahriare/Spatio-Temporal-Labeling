@@ -107,6 +107,7 @@ class SignupRequest(BaseModel):
     email: str
     password: str
     username: str
+    role: Optional[str] = "annotator"
 
 
 class LoginRequest(BaseModel):
@@ -118,7 +119,12 @@ class UserOut(BaseModel):
     id: int
     email: str
     username: str
+    role: str = "annotator"
     created_at: datetime
+
+
+class UserRoleUpdate(BaseModel):
+    role: str  # 'annotator' | 'reviewer' | 'admin'
 
 
 class AuthMeResponse(BaseModel):
@@ -134,11 +140,16 @@ class StemOut(BaseModel):
     id: int
     text: str
     word_count: int
-    state: str  # 'available' | 'booked' | 'completed'
+    state: str  # 'available' | 'booked' | 'pending-review' | 're-evaluate' | 'completed' | 'blacklisted'
     booked_by: Optional[Dict[str, Any]] = None
     locked_until: Optional[datetime] = None
     completed_by: Optional[Dict[str, Any]] = None
     completed_at: Optional[datetime] = None
+    is_blacklisted: bool = False
+    blacklist_reason: Optional[str] = None
+    blacklisted_by: Optional[Dict[str, Any]] = None
+    blacklisted_at: Optional[datetime] = None
+    latest_review: Optional[Dict[str, Any]] = None
 
 
 class StemsListResponse(BaseModel):
@@ -173,7 +184,7 @@ class BatchOut(BaseModel):
     rebook_count: int
     status: str
     remaining_seconds: int
-    progress: Dict[str, int]  # {"done": N, "total": M}
+    progress: Dict[str, int]  # {"done": N, "total": M, "pending_review": P, "re_evaluate": R}
 
 
 class BatchDetailOut(BatchOut):
@@ -185,9 +196,12 @@ class BatchStemOut(BaseModel):
     stem_id: int
     stem_text: str
     word_count: int
-    status: str
+    status: str  # 'not_started' | 'in_progress' | 'pending-review' | 'done' | 're-evaluate' | 'blacklisted'
     completed_by: Optional[Dict[str, Any]] = None
     completed_at: Optional[datetime] = None
+    reviewer: Optional[Dict[str, Any]] = None
+    reviewed_at: Optional[datetime] = None
+    latest_review: Optional[Dict[str, Any]] = None
     updated_at: Optional[datetime] = None
 
 
@@ -223,3 +237,40 @@ class BatchSpanOut(BaseModel):
 class ConflictResponse(BaseModel):
     message: str
     conflict_stem_ids: List[int]
+
+
+# ---------------------------------------------------------------------------
+# Review models
+# ---------------------------------------------------------------------------
+
+class ReviewDecisionRequest(BaseModel):
+    decision: str  # 'accept' | 're-evaluate' | 'blacklist'
+    comment: Optional[str] = None
+
+
+class StemReviewOut(BaseModel):
+    id: int
+    batch_stem_id: int
+    stem_id: int
+    reviewer_id: int
+    reviewer_username: str
+    decision: str
+    comment: Optional[str] = None
+    created_at: datetime
+
+
+class PendingReviewItemOut(BaseModel):
+    batch_stem_id: int
+    batch_id: int
+    batch_name: str
+    stem_id: int
+    stem_text: str
+    word_count: int
+    annotator_id: int
+    annotator_username: str
+    status: str
+    submitted_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+    event_count: int = 0
+    latest_comment: Optional[str] = None
+

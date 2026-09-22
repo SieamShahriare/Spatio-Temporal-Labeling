@@ -132,10 +132,30 @@ export default function DashboardPage() {
             Dashboard
           </h1>
           <p style={{ fontSize: 13, color: 'var(--text-muted)', margin: '4px 0 0' }}>
-            Welcome, {user?.username}
+            Welcome, {user?.username} {user?.role && user.role !== 'annotator' ? `(${user.role})` : ''}
           </p>
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
+          {(user?.role === 'reviewer' || user?.role === 'admin') && (
+            <button
+              onClick={() => router.push('/reviews')}
+              style={{
+                padding: '8px 16px',
+                background: '#8b5cf6',
+                color: '#fff',
+                border: 'none',
+                borderRadius: 6,
+                cursor: 'pointer',
+                fontWeight: 600,
+                fontSize: 13,
+                display: 'flex',
+                alignItems: 'center',
+                gap: 6,
+              }}
+            >
+              📋 Review Queue
+            </button>
+          )}
           <button
             onClick={() => router.push('/stems')}
             style={{
@@ -187,7 +207,7 @@ export default function DashboardPage() {
         </div>
       )}
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 16, marginBottom: 32 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 16, marginBottom: 32 }}>
         <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 10, padding: 20 }}>
           <div style={{ fontSize: 12, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 8 }}>My Batches</div>
           <div style={{ fontSize: 28, fontWeight: 700 }}>{batches.length}</div>
@@ -200,6 +220,22 @@ export default function DashboardPage() {
           <div style={{ fontSize: 12, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 8 }}>Past / Released</div>
           <div style={{ fontSize: 28, fontWeight: 700 }}>{pastBatches.length}</div>
         </div>
+        {(user?.role === 'reviewer' || user?.role === 'admin') && (
+          <div
+            onClick={() => router.push('/reviews')}
+            style={{
+              background: 'var(--surface)',
+              border: '2px solid #8b5cf6',
+              borderRadius: 10,
+              padding: 20,
+              cursor: 'pointer',
+              transition: 'transform 0.15s ease',
+            }}
+          >
+            <div style={{ fontSize: 12, color: '#8b5cf6', textTransform: 'uppercase', fontWeight: 600, letterSpacing: '0.05em', marginBottom: 8 }}>Review Queue</div>
+            <div style={{ fontSize: 16, fontWeight: 700, color: '#8b5cf6' }}>Open Queue →</div>
+          </div>
+        )}
       </div>
 
       {loading ? (
@@ -276,6 +312,8 @@ export default function DashboardPage() {
                           <div style={{ fontSize: 12, color: 'var(--text-muted)', display: 'flex', gap: 12, flexWrap: 'wrap' }}>
                             <span>Lock: <Countdown expiresAt={b.expires_at} /></span>
                             <span>Progress: {b.progress.done}/{b.progress.total}</span>
+                            {Boolean(b.progress.pending_review) && <span style={{ color: '#8b5cf6' }}>{b.progress.pending_review} pending review</span>}
+                            {Boolean(b.progress.re_evaluate) && <span style={{ color: '#b45309' }}>{b.progress.re_evaluate} needs fix</span>}
                             <span>Re-books: {b.rebook_count}/2</span>
                           </div>
                         </div>
@@ -349,49 +387,107 @@ export default function DashboardPage() {
                               </div>
                               <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 8, fontWeight: 600 }}>STEMS</div>
                               <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                                {detailData.stems.map(bs => (
-                                  <div
-                                    key={bs.id}
-                                    style={{
-                                      display: 'flex',
-                                      alignItems: 'center',
-                                      justifyContent: 'space-between',
-                                      padding: '8px 10px',
-                                      background: 'var(--surface)',
-                                      border: '1px solid var(--border)',
-                                      borderRadius: 6,
-                                      fontSize: 13,
-                                    }}
-                                  >
-                                    <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginRight: 8 }}>
-                                      {bs.stem_text.slice(0, 80)}{bs.stem_text.length > 80 ? '…' : ''}
-                                    </span>
-                                    <span style={{
-                                      padding: '2px 8px',
-                                      borderRadius: 20,
-                                      fontSize: 11,
-                                      fontWeight: 600,
-                                      background: bs.status === 'done' ? 'var(--success-bg)' : bs.status === 'in_progress' ? 'var(--warning-bg)' : 'var(--surface-alt)',
-                                      color: bs.status === 'done' ? 'var(--success)' : bs.status === 'in_progress' ? 'var(--warning-text)' : 'var(--text-muted)',
-                                    }}>
-                                      {bs.status.replace('_', ' ')}
-                                    </span>
-                                    <button
-                                      onClick={() => router.push(`/annotate/${detailData.id}/${bs.id}`)}
-                                      style={{ ...btnStyle('#2563eb', '#fff'), marginLeft: 8, fontSize: 11, padding: '2px 10px' }}
+                                {detailData.stems.map(bs => {
+                                  const isReviewer = user?.role === 'reviewer' || user?.role === 'admin';
+                                  let badgeBg = 'var(--surface-alt)';
+                                  let badgeColor = 'var(--text-muted)';
+                                  let statusLabel = bs.status.replace('_', ' ');
+
+                                  if (bs.status === 'done') {
+                                    badgeBg = 'var(--success-bg)';
+                                    badgeColor = 'var(--success)';
+                                    statusLabel = 'done';
+                                  } else if (bs.status === 'pending-review') {
+                                    badgeBg = 'rgba(139, 92, 246, 0.15)';
+                                    badgeColor = '#8b5cf6';
+                                    statusLabel = 'pending review';
+                                  } else if (bs.status === 're-evaluate') {
+                                    badgeBg = '#fef3c7';
+                                    badgeColor = '#b45309';
+                                    statusLabel = 'needs fix';
+                                  } else if (bs.status === 'blacklisted') {
+                                    badgeBg = '#fee2e2';
+                                    badgeColor = '#b91c1c';
+                                    statusLabel = 'blacklisted';
+                                  } else if (bs.status === 'in_progress') {
+                                    badgeBg = 'var(--warning-bg)';
+                                    badgeColor = 'var(--warning-text)';
+                                    statusLabel = 'in progress';
+                                  }
+
+                                  let actionLabel = 'Start';
+                                  let actionBg = '#2563eb';
+                                  let actionColor = '#fff';
+
+                                  if (isReviewer) {
+                                    actionLabel = bs.status === 'pending-review' ? 'Review' : 'View / Review';
+                                    actionBg = bs.status === 'pending-review' ? '#8b5cf6' : 'var(--surface-alt)';
+                                    actionColor = bs.status === 'pending-review' ? '#fff' : 'var(--text-primary)';
+                                  } else {
+                                    if (bs.status === 'done' || bs.status === 'pending-review' || bs.status === 'blacklisted') {
+                                      actionLabel = 'View';
+                                      actionBg = 'var(--surface-alt)';
+                                      actionColor = 'var(--text-primary)';
+                                    } else if (bs.status === 're-evaluate') {
+                                      actionLabel = 'Fix';
+                                      actionBg = '#d97706';
+                                      actionColor = '#fff';
+                                    } else if (bs.status === 'in_progress') {
+                                      actionLabel = 'Continue';
+                                      actionBg = '#2563eb';
+                                      actionColor = '#fff';
+                                    }
+                                  }
+
+                                  return (
+                                    <div
+                                      key={bs.id}
+                                      style={{
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        justifyContent: 'space-between',
+                                        padding: '8px 10px',
+                                        background: 'var(--surface)',
+                                        border: '1px solid var(--border)',
+                                        borderRadius: 6,
+                                        fontSize: 13,
+                                      }}
                                     >
-                                      {bs.status === 'done' ? 'Review' : bs.status === 'in_progress' ? 'Continue' : 'Start'}
-                                    </button>
-                                    <a
-                                      href={exportBatchStemJson(bs.id)}
-                                      download
-                                      title="Download stem JSON"
-                                      style={{ ...btnStyle('var(--surface-alt)', 'var(--text-primary)'), textDecoration: 'none', marginLeft: 6, fontSize: 11, padding: '2px 8px', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', lineHeight: 1 }}
-                                    >
-                                      ⬇
-                                    </a>
-                                  </div>
-                                ))}
+                                      <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginRight: 8 }}>
+                                        {bs.stem_text.slice(0, 80)}{bs.stem_text.length > 80 ? '…' : ''}
+                                      </span>
+                                      <span style={{
+                                        padding: '2px 8px',
+                                        borderRadius: 20,
+                                        fontSize: 11,
+                                        fontWeight: 600,
+                                        background: badgeBg,
+                                        color: badgeColor,
+                                      }}>
+                                        {statusLabel}
+                                      </span>
+                                      <button
+                                        onClick={() => {
+                                          const url = isReviewer
+                                            ? `/annotate/${detailData.id}/${bs.id}?mode=review`
+                                            : `/annotate/${detailData.id}/${bs.id}`;
+                                          router.push(url);
+                                        }}
+                                        style={{ ...btnStyle(actionBg, actionColor), marginLeft: 8, fontSize: 11, padding: '2px 10px' }}
+                                      >
+                                        {actionLabel}
+                                      </button>
+                                      <a
+                                        href={exportBatchStemJson(bs.id)}
+                                        download
+                                        title="Download stem JSON"
+                                        style={{ ...btnStyle('var(--surface-alt)', 'var(--text-primary)'), textDecoration: 'none', marginLeft: 6, fontSize: 11, padding: '2px 8px', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', lineHeight: 1 }}
+                                      >
+                                        ⬇
+                                      </a>
+                                    </div>
+                                  );
+                                })}
                               </div>
                             </div>
                           ) : null}

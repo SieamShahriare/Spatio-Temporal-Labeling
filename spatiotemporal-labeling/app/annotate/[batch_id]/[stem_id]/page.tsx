@@ -1,11 +1,13 @@
 'use client';
 
 import { useEffect, useState, useCallback, useRef } from 'react';
-import { useParams, useRouter } from 'next/navigation';
+import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import TextLabeler from '@/components/TextLabeler';
 import Timeline from '@/components/Timeline';
 import AllenMatrix from '@/components/AllenMatrix';
 import LabeledText from '@/components/LabeledText';
+import ReviewControls from '@/components/ReviewControls';
+import MethodologyGuide from '@/components/MethodologyGuide';
 import {
   getBatchStem,
   listBatchSpans,
@@ -15,16 +17,19 @@ import {
   getBatchMatrix,
   saveBatchMatrix,
   overrideBatchMatrix,
-  markBatchStemDone,
+  submitBatchStemForReview,
+  reviewBatchStem,
+  getStemReviews,
   extractEvents,
   extractTimeline,
   llmLabelAndTimeline,
 } from '@/lib/api';
-import { BatchStemDetail, BatchSpanOut, MatrixData, ExtractEventsResponse, ExtractTimelineResponse, LLMLabelAndTimelineResponse } from '@/lib/types';
+import { BatchStemDetail, BatchSpanOut, MatrixData, ExtractEventsResponse, ExtractTimelineResponse, LLMLabelAndTimelineResponse, StemReview } from '@/lib/types';
 import { useAuth } from '@/lib/AuthContext';
 
 export default function AnnotateBatchStemPage() {
   const params = useParams<{ batch_id: string; stem_id: string }>();
+  const searchParams = useSearchParams();
   const batchId = parseInt(params.batch_id);
   const stemId = parseInt(params.stem_id);
   const router = useRouter();
@@ -34,8 +39,11 @@ export default function AnnotateBatchStemPage() {
   const [stem, setStem] = useState<BatchStemDetail | null>(null);
   const [spans, setSpans] = useState<BatchSpanOut[]>([]);
   const [matrixData, setMatrixData] = useState<MatrixData | null>(null);
+  const [reviews, setReviews] = useState<StemReview[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [reviewing, setReviewing] = useState(false);
+  const [showAnnotatorGuide, setShowAnnotatorGuide] = useState(false);
   const [extracting, setExtracting] = useState(false);
   const [extractingTimeline, setExtractingTimeline] = useState(false);
   const [extractingBoth, setExtractingBoth] = useState(false);
@@ -67,6 +75,12 @@ export default function AnnotateBatchStemPage() {
         const sp = await listBatchSpans(stemId);
         if (cancelled) return;
         setSpans(sp);
+        try {
+          const revs = await getStemReviews(stemId);
+          if (!cancelled) setReviews(revs);
+        } catch {
+          // ignore review fetch error for non-reviewers
+        }
       } catch (e: unknown) {
         if (cancelled) return;
         const msg = e instanceof Error ? e.message : 'Failed to load stem.';
@@ -238,20 +252,49 @@ export default function AnnotateBatchStemPage() {
     }
   }, [stemId]);
 
-  const handleMarkDone = async () => {
-    if (!confirm('Mark this stem as done and return to batch detail?')) return;
+  const handleSubmitForReview = useCallback(async () => {
+    const eventCount = spans.filter(s => s.label_type === 'Event').length;
+    if (eventCount === 0) {
+      setError('Please label at least one Event span before submitting for review.');
+      return;
+    }
+    const isResubmit = stem?.status === 're-evaluate';
+    const confirmMsg = isResubmit
+      ? 'Resubmit this stem for reviewer evaluation?'
+      : 'Submit this stem for review? A reviewer will evaluate your event and timeline annotations.';
+    if (!confirm(confirmMsg)) return;
+    setSaving(true);
     try {
       await saveBatchMatrix(stemId);
-      await markBatchStemDone(stemId);
+      await submitBatchStemForReview(stemId);
       router.push(`/batches/${batchId}`);
     } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : 'Failed to mark done.';
+      const msg = e instanceof Error ? e.message : 'Failed to submit for review.';
       setError(msg);
       if (msg.includes('423') || msg.includes('Lock expired')) {
         setTimeout(() => router.replace('/'), 2000);
       }
+    } finally {
+      setSaving(false);
     }
-  };
+  }, [stem, stemId, batchId, spans, router]);
+
+  const handleReview = useCallback(async (decision: 'accept' | 're-evaluate' | 'blacklist', comment?: string) => {
+    setReviewing(true);
+    setError('');
+    try {
+      await reviewBatchStem(stemId, { decision, comment });
+      router.push('/reviews');
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : 'Review action failed.';
+      setError(msg);
+    } finally {
+      setReviewing(false);
+    }
+  }, [stemId, router]);
+
+  const isReviewMode = searchParams?.get('mode') === 'review' || user?.role === 'reviewer';
+  const isReadOnly = !isReviewMode && (stem?.status === 'pending-review' || stem?.status === 'done' || stem?.status === 'blacklisted');
 
   if (!isBrowser || authLoading) {
     return <div style={{ minHeight: '100vh', background: 'var(--background-page)' }} />;
@@ -266,13 +309,116 @@ export default function AnnotateBatchStemPage() {
   return (
     <>
       <main style={{ maxWidth: 1400, margin: '0 auto', padding: '32px 20px', fontFamily: 'system-ui, sans-serif' }}>
+        {/* Reviewer Controls if in Review Mode */}
+        {isReviewMode && (
+          <ReviewControls
+            stemId={stemId}
+            batchId={batchId}
+            annotatorUsername={stem.owner_username}
+            status={stem.status}
+            reviews={reviews}
+            onReview={handleReview}
+            submitting={reviewing}
+          />
+        )}
+
+        {/* Annotator Feedback Banner when Re-evaluation is requested */}
+        {!isReviewMode && stem.status === 're-evaluate' && stem.latest_review && (
+          <div style={{
+            background: '#fef3c7',
+            border: '1px solid #fde68a',
+            borderRadius: 10,
+            padding: 16,
+            marginBottom: 20,
+            color: '#92400e',
+          }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+              <strong style={{ fontSize: 14, display: 'flex', alignItems: 'center', gap: 6 }}>
+                ⚠️ Reviewer Feedback (Re-evaluation Requested):
+              </strong>
+              <span style={{ fontSize: 12, color: '#b45309' }}>
+                by {stem.latest_review.reviewer_username} · {new Date(stem.latest_review.created_at).toLocaleString()}
+              </span>
+            </div>
+            <div style={{
+              whiteSpace: 'pre-wrap',
+              fontSize: 13,
+              background: 'rgba(255,255,255,0.7)',
+              padding: 12,
+              borderRadius: 6,
+              color: '#78350f',
+              border: '1px solid rgba(217, 119, 6, 0.2)',
+            }}>
+              {stem.latest_review.comment}
+            </div>
+            <p style={{ margin: '8px 0 0', fontSize: 12, color: '#92400e' }}>
+              Please update your Event/Time labels, Timeline positions, or Allen Matrix according to the guidance above, then click <strong>&ldquo;Resubmit for Review&rdquo;</strong>.
+            </p>
+          </div>
+        )}
+
+        {/* Status notice banners */}
+        {!isReviewMode && stem.status === 'pending-review' && (
+          <div style={{
+            background: '#f3e8ff',
+            border: '1px solid #e9d5ff',
+            borderRadius: 8,
+            padding: '12px 16px',
+            marginBottom: 20,
+            color: '#6b21a8',
+            fontSize: 13,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+          }}>
+            <span style={{ fontSize: 16 }}>🕒</span>
+            <div>
+              <strong>Pending Review:</strong> This stem has been submitted for review. It is preserved and read-only until evaluated by a reviewer.
+            </div>
+          </div>
+        )}
+
+        {!isReviewMode && stem.status === 'done' && (
+          <div style={{
+            background: '#f0fdf4',
+            border: '1px solid #bbf7d0',
+            borderRadius: 8,
+            padding: '12px 16px',
+            marginBottom: 20,
+            color: '#166534',
+            fontSize: 13,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+          }}>
+            <span style={{ fontSize: 16 }}>✓</span>
+            <div>
+              <strong>Approved (Done):</strong> This annotation has been accepted by the reviewer.
+            </div>
+          </div>
+        )}
+
+        {!isReviewMode && stem.status === 'blacklisted' && (
+          <div style={{
+            background: '#fef2f2',
+            border: '1px solid #fecaca',
+            borderRadius: 8,
+            padding: '12px 16px',
+            marginBottom: 20,
+            color: '#991b1b',
+            fontSize: 13,
+          }}>
+            <strong>⊘ Blacklisted / Unannotable:</strong> Reason: {stem.blacklist_reason || 'Marked as unannotable.'}
+          </div>
+        )}
+
         <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 24 }}>
           <div>
             <button
-              onClick={() => router.push(`/batches/${batchId}`)}
+              onClick={() => router.push(isReviewMode ? '/reviews' : `/batches/${batchId}`)}
               style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', fontSize: 13, padding: 0, marginBottom: 6 }}
             >
-              ← Back to Batch
+              {isReviewMode ? '← Back to Review Queue' : '← Back to Batch'}
             </button>
             <h1 style={{ fontSize: 18, fontWeight: 700, margin: 0 }}>
               Stem #{stem.stem_id} — Batch #{batchId}
@@ -282,39 +428,65 @@ export default function AnnotateBatchStemPage() {
             </p>
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'flex-end' }}>
-            <button
-              onClick={handleMarkDone}
-              style={{
-                padding: '8px 16px',
-                background: '#15803d',
-                color: '#fff',
-                border: 'none',
-                borderRadius: 6,
-                cursor: 'pointer',
-                fontWeight: 600,
-                fontSize: 13,
-              }}
-            >
-              ✓ Mark Done &amp; Return
-            </button>
-            <button
-              onClick={handleLLMLabelAndTimeline}
-              disabled={extractingBoth}
-              style={{
-                padding: '8px 16px',
-                background: extractingBoth ? 'var(--text-disabled)' : '#2563eb',
-                color: '#fff',
-                border: 'none',
-                borderRadius: 6,
-                cursor: extractingBoth ? 'not-allowed' : 'pointer',
-                fontWeight: 600,
-                fontSize: 13,
-              }}
-            >
-              {extractingBoth ? 'Processing…' : 'Use LLM to label events and detect timeline (recommended)'}
-            </button>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button
+                onClick={() => setShowAnnotatorGuide(true)}
+                style={{
+                  padding: '8px 14px',
+                  background: 'var(--surface-alt)',
+                  border: '1px solid var(--border)',
+                  borderRadius: 6,
+                  cursor: 'pointer',
+                  fontSize: 13,
+                  fontWeight: 600,
+                  color: '#2563eb',
+                }}
+              >
+                📖 Methodology Guide
+              </button>
+
+              {!isReviewMode && !isReadOnly && (
+                <button
+                  onClick={handleSubmitForReview}
+                  disabled={saving}
+                  style={{
+                    padding: '8px 16px',
+                    background: stem.status === 're-evaluate' ? '#d97706' : '#15803d',
+                    color: '#fff',
+                    border: 'none',
+                    borderRadius: 6,
+                    cursor: saving ? 'not-allowed' : 'pointer',
+                    fontWeight: 600,
+                    fontSize: 13,
+                  }}
+                >
+                  {saving ? 'Submitting…' : stem.status === 're-evaluate' ? 'Resubmit for Review →' : 'Submit for Review →'}
+                </button>
+              )}
+            </div>
+
+            {!isReviewMode && !isReadOnly && (
+              <button
+                onClick={handleLLMLabelAndTimeline}
+                disabled={extractingBoth}
+                style={{
+                  padding: '8px 16px',
+                  background: extractingBoth ? 'var(--text-disabled)' : '#2563eb',
+                  color: '#fff',
+                  border: 'none',
+                  borderRadius: 6,
+                  cursor: extractingBoth ? 'not-allowed' : 'pointer',
+                  fontWeight: 600,
+                  fontSize: 13,
+                }}
+              >
+                {extractingBoth ? 'Processing…' : 'Use LLM to label events and detect timeline (recommended)'}
+              </button>
+            )}
           </div>
         </div>
+
+        <MethodologyGuide isOpen={showAnnotatorGuide} onClose={() => setShowAnnotatorGuide(false)} />
 
         {error && (
           <div style={{

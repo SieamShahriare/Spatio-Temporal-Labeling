@@ -6,7 +6,7 @@ import { listStems, createBatch, importStems } from '@/lib/api';
 import { StemOut, StemsListResponse } from '@/lib/types';
 import { useAuth } from '@/lib/AuthContext';
 
-type StatusFilter = 'all' | 'available' | 'booked' | 'completed' | 'mine';
+type StatusFilter = 'all' | 'available' | 'booked' | 'completed' | 'mine' | 'pending-review' | 're-evaluate' | 'blacklisted';
 
 const STATUS_OPTIONS: { value: StatusFilter; label: string }[] = [
   { value: 'all', label: 'All' },
@@ -14,6 +14,9 @@ const STATUS_OPTIONS: { value: StatusFilter; label: string }[] = [
   { value: 'booked', label: 'Booked' },
   { value: 'completed', label: 'Completed' },
   { value: 'mine', label: 'Booked by me' },
+  { value: 'pending-review', label: 'Pending Review' },
+  { value: 're-evaluate', label: 'Needs Re-evaluation' },
+  { value: 'blacklisted', label: 'Blacklisted' },
 ];
 
 function formatWhen(ts: string | null): string {
@@ -30,6 +33,57 @@ function formatWhen(ts: string | null): string {
 }
 
 function statusBadge(s: StemOut) {
+  if (s.state === 'blacklisted' || s.is_blacklisted) {
+    return (
+      <span
+        title={s.blacklist_reason ? `Reason: ${s.blacklist_reason}` : 'Marked unannotable'}
+        style={{
+          padding: '2px 8px',
+          borderRadius: 20,
+          fontSize: 11,
+          fontWeight: 600,
+          background: '#fee2e2',
+          color: '#b91c1c',
+          cursor: s.blacklist_reason ? 'help' : 'default',
+        }}
+      >
+        blacklisted {s.blacklist_reason ? 'ⓘ' : ''}
+      </span>
+    );
+  }
+  if (s.state === 'pending-review') {
+    return (
+      <span style={{
+        padding: '2px 8px',
+        borderRadius: 20,
+        fontSize: 11,
+        fontWeight: 600,
+        background: 'rgba(139, 92, 246, 0.15)',
+        color: '#8b5cf6',
+      }}>
+        pending review {s.booked_by ? `· ${s.booked_by.username}` : ''}
+      </span>
+    );
+  }
+  if (s.state === 're-evaluate') {
+    const feedbackTip = s.latest_review?.comment || '';
+    return (
+      <span
+        title={feedbackTip ? `Reviewer feedback: ${feedbackTip}` : 'Needs re-evaluation'}
+        style={{
+          padding: '2px 8px',
+          borderRadius: 20,
+          fontSize: 11,
+          fontWeight: 600,
+          background: '#fef3c7',
+          color: '#b45309',
+          cursor: feedbackTip ? 'help' : 'default',
+        }}
+      >
+        needs fix {feedbackTip ? 'ⓘ' : ''}
+      </span>
+    );
+  }
   if (s.state === 'available') {
     return (
       <span style={{
@@ -189,7 +243,10 @@ export default function StemsPage() {
           setSelected(prev => {
             // Keep selections across pages and filters; only drop stems that are no longer available.
             const next = new Set(prev);
-            data.items.forEach(it => { if (it.state !== 'available') next.delete(it.id); });
+            data.items.forEach(it => {
+              const canSelect = it.state === 'available' || (it.state === 're-evaluate' && !it.locked_until && !it.is_blacklisted);
+              if (!canSelect) next.delete(it.id);
+            });
             return next;
           });
         }
@@ -439,7 +496,7 @@ export default function StemsPage() {
                <tr><td colSpan={5} style={{ padding: 24, textAlign: 'center', color: 'var(--text-muted)' }}>No stems found.</td></tr>
              ) : (
                items.map(s => {
-                 const isAvailable = s.state === 'available';
+                 const isAvailable = s.state === 'available' || (s.state === 're-evaluate' && !s.locked_until && !s.is_blacklisted);
                  const isConflict = conflicts.has(s.id);
                  return (
                    <tr
