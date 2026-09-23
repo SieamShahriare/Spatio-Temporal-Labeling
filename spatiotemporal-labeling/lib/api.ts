@@ -1,6 +1,6 @@
 // API helper — all calls go to NEXT_PUBLIC_API_URL (FastAPI backend)
 
-import type { LLMLabelAndTimelineResponse, ReviewDecisionRequest } from '@/lib/types';
+import type { LLMLabelAndTimelineResponse, ReviewDecisionRequest, CompletedStemsResponse } from '@/lib/types';
 
 const BASE = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000';
 
@@ -261,3 +261,12 @@ export const updateSpan = (spanId: number, tl_start: number, tl_end: number) =>
 
 export const deleteSpan = (spanId: number) =>
   apiFetch(`/spans/${spanId}`, { method: 'DELETE' });
+
+export const listCompletedStems = (params?: { search?: string; page?: number; page_size?: number }): Promise<CompletedStemsResponse> => {
+  const qs = new URLSearchParams();
+  if (params?.search) qs.set('search', params.search);
+  if (params?.page) qs.set('page', String(params.page));
+  if (params?.page_size) qs.set('page_size', String(params.page_size));
+  const query = qs.toString();
+  return apiFetch(`/completed-stems${query ? `?${query}` : ''}`);
+};

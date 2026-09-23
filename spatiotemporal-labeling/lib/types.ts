@@ -116,6 +116,8 @@ export interface StemOut {
   locked_until: string | null;
   completed_by: { id: number; username: string } | null;
   completed_at: string | null;
+  completed_batch_stem_id?: number | null;
+  completed_batch_id?: number | null;
   is_blacklisted?: boolean;
   blacklist_reason?: string | null;
   blacklisted_by?: { id: number; username: string } | null;
@@ -130,6 +132,35 @@ export interface StemOut {
 
 export interface StemsListResponse {
   items: StemOut[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
+export interface CompletedStemItem {
+  batch_stem_id: number;
+  batch_id: number;
+  batch_name: string;
+  stem_id: number;
+  stem_text: string;
+  word_count: number;
+  status: string;
+  completed_by?: { id: number; username: string } | null;
+  completed_at?: string | null;
+  reviewer?: { id: number; username: string } | null;
+  reviewed_at?: string | null;
+  event_count: number;
+  time_count: number;
+  latest_review?: {
+    decision: string;
+    comment: string | null;
+    reviewer_username: string;
+    created_at: string;
+  } | null;
+}
+
+export interface CompletedStemsResponse {
+  items: CompletedStemItem[];
   total: number;
   page: number;
   page_size: number;
@@ -215,6 +246,8 @@ export interface BatchStemDetail {
   owner_username?: string;
   completed_by: number | null;
   completed_at: string | null;
+  reviewer_id?: number | null;
+  reviewer_username?: string | null;
   reviewer?: { id: number; username: string } | null;
   reviewed_at?: string | null;
   latest_review?: {

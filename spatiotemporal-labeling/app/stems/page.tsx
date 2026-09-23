@@ -362,21 +362,41 @@ export default function StemsPage() {
              {total} stems · select available stems to book them into a batch
           </p>
         </div>
-        <button
-          onClick={() => setShowImport(true)}
-          style={{
-            padding: '8px 16px',
-            background: '#2563eb',
-            color: '#fff',
-            border: 'none',
-            borderRadius: 6,
-            cursor: 'pointer',
-            fontWeight: 600,
-            fontSize: 13,
-          }}
-        >
-          Add stems
-        </button>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <button
+            onClick={() => router.push('/completed')}
+            style={{
+              padding: '8px 16px',
+              background: '#16a34a',
+              color: '#fff',
+              border: 'none',
+              borderRadius: 6,
+              cursor: 'pointer',
+              fontWeight: 600,
+              fontSize: 13,
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 6,
+            }}
+          >
+            ✓ Completed Stems
+          </button>
+          <button
+            onClick={() => setShowImport(true)}
+            style={{
+              padding: '8px 16px',
+              background: '#2563eb',
+              color: '#fff',
+              border: 'none',
+              borderRadius: 6,
+              cursor: 'pointer',
+              fontWeight: 600,
+              fontSize: 13,
+            }}
+          >
+            Add stems
+          </button>
+        </div>
       </div>
 
       {error && (
@@ -487,13 +507,14 @@ export default function StemsPage() {
                <th style={{ ...th, flex: 1 }}>Preview</th>
                <th style={th}>Len</th>
                <th style={th}>Status</th>
+               <th style={th}>Action</th>
              </tr>
            </thead>
            <tbody>
              {loading ? (
-               <tr><td colSpan={5} style={{ padding: 24, textAlign: 'center', color: 'var(--text-muted)' }}>Loading…</td></tr>
+               <tr><td colSpan={6} style={{ padding: 24, textAlign: 'center', color: 'var(--text-muted)' }}>Loading…</td></tr>
              ) : items.length === 0 ? (
-               <tr><td colSpan={5} style={{ padding: 24, textAlign: 'center', color: 'var(--text-muted)' }}>No stems found.</td></tr>
+               <tr><td colSpan={6} style={{ padding: 24, textAlign: 'center', color: 'var(--text-muted)' }}>No stems found.</td></tr>
              ) : (
                items.map(s => {
                  const isAvailable = s.state === 'available' || (s.state === 're-evaluate' && !s.locked_until && !s.is_blacklisted);
@@ -520,6 +541,28 @@ export default function StemsPage() {
                     </td>
                     <td style={td}>{s.word_count}</td>
                     <td style={td}>{statusBadge(s)}</td>
+                    <td style={td}>
+                      {s.state === 'completed' && s.completed_batch_stem_id ? (
+                        <button
+                          onClick={() => router.push(`/completed/${s.completed_batch_stem_id}`)}
+                          style={{
+                            padding: '3px 10px',
+                            background: '#16a34a',
+                            color: '#fff',
+                            border: 'none',
+                            borderRadius: 4,
+                            fontSize: 12,
+                            fontWeight: 600,
+                            cursor: 'pointer',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: 4,
+                          }}
+                        >
+                          👁️ View
+                        </button>
+                      ) : null}
+                    </td>
                   </tr>
                 );
               })

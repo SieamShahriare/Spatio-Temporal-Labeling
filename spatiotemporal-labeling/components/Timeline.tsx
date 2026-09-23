@@ -6,9 +6,10 @@ import { colorForSpan } from '@/lib/spanColors';
 
 interface Props {
   spans: Span[];
-  onUpdateSpan: (spanId: number, tlStart: number, tlEnd: number) => void;
+  onUpdateSpan?: (spanId: number, tlStart: number, tlEnd: number) => void;
   onExtractTimeline?: () => Promise<void>;
   extractingTimeline?: boolean;
+  readOnly?: boolean;
 }
 
 const TRACK_HEIGHT = 40;
@@ -41,7 +42,7 @@ const findSnap = (value: number, targets: number[], threshold: number): number |
   return best;
 };
 
-export default function Timeline({ spans, onUpdateSpan, onExtractTimeline, extractingTimeline = false }: Props) {
+export default function Timeline({ spans, onUpdateSpan, onExtractTimeline, extractingTimeline = false, readOnly = false }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [trackWidthPx, setTrackWidthPx] = useState<number>(760);
   const [dragging, setDragging] = useState<{
@@ -139,7 +140,7 @@ export default function Timeline({ spans, onUpdateSpan, onExtractTimeline, extra
     const onUp = () => {
       if (dragging) {
         const updated = localSpans.find(s => s.id === dragging.spanId);
-        if (updated) onUpdateSpan(updated.id, updated.tl_start, updated.tl_end);
+        if (updated) onUpdateSpan?.(updated.id, updated.tl_start, updated.tl_end);
       }
       setSnapGuides([]);
       setDragging(null);
@@ -172,7 +173,7 @@ export default function Timeline({ spans, onUpdateSpan, onExtractTimeline, extra
       start = round1(start);
       end = round1(end);
       setLocalSpans(prev => prev.map(item => item.id === spanId ? { ...item, tl_start: start, tl_end: end } : item));
-      onUpdateSpan(s.id, start, end);
+      onUpdateSpan?.(s.id, start, end);
     }
   };
 
@@ -190,7 +191,7 @@ export default function Timeline({ spans, onUpdateSpan, onExtractTimeline, extra
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 8 }}>
-        {onExtractTimeline && (
+        {onExtractTimeline && !readOnly && (
           <button
             onClick={onExtractTimeline}
             disabled={extractingTimeline}
@@ -275,7 +276,7 @@ export default function Timeline({ spans, onUpdateSpan, onExtractTimeline, extra
                   }} />
 
                   <div
-                    onMouseDown={e => onMouseDown(e, span.id, 'move')}
+                    onMouseDown={!readOnly ? e => onMouseDown(e, span.id, 'move') : undefined}
                     onMouseEnter={() => setHoveredSpanId(span.id)}
                     onMouseLeave={() => setHoveredSpanId(null)}
                     title={`${span.seq_label}: ${span.span_text} [${span.tl_start}–${span.tl_end}]`}
@@ -286,7 +287,7 @@ export default function Timeline({ spans, onUpdateSpan, onExtractTimeline, extra
                       height: TRACK_HEIGHT,
                       background: colors.bg,
                       borderRadius: 4,
-                      cursor: dragging?.spanId === span.id ? 'grabbing' : 'grab',
+                      cursor: readOnly ? 'default' : (dragging?.spanId === span.id ? 'grabbing' : 'grab'),
                       display: 'flex',
                       alignItems: 'center',
                       justifyContent: 'center',
@@ -306,22 +307,26 @@ export default function Timeline({ spans, onUpdateSpan, onExtractTimeline, extra
                     <span style={{ pointerEvents: 'none', flexShrink: 0 }}>
                       {span.seq_label}
                     </span>
-                    <div
-                      onMouseDown={e => { e.stopPropagation(); onMouseDown(e, span.id, 'resize-left'); }}
-                      style={{
-                        position: 'absolute', left: 0, top: 0, width: 8, height: '100%',
-                        cursor: 'ew-resize', background: 'rgba(255,255,255,0.3)',
-                        borderRadius: '4px 0 0 4px',
-                      }}
-                    />
-                    <div
-                      onMouseDown={e => { e.stopPropagation(); onMouseDown(e, span.id, 'resize-right'); }}
-                      style={{
-                        position: 'absolute', right: 0, top: 0, width: 8, height: '100%',
-                        cursor: 'ew-resize', background: 'rgba(255,255,255,0.3)',
-                        borderRadius: '0 4px 4px 0',
-                      }}
-                    />
+                    {!readOnly && (
+                      <>
+                        <div
+                          onMouseDown={e => { e.stopPropagation(); onMouseDown(e, span.id, 'resize-left'); }}
+                          style={{
+                            position: 'absolute', left: 0, top: 0, width: 8, height: '100%',
+                            cursor: 'ew-resize', background: 'rgba(255,255,255,0.3)',
+                            borderRadius: '4px 0 0 4px',
+                          }}
+                        />
+                        <div
+                          onMouseDown={e => { e.stopPropagation(); onMouseDown(e, span.id, 'resize-right'); }}
+                          style={{
+                            position: 'absolute', right: 0, top: 0, width: 8, height: '100%',
+                            cursor: 'ew-resize', background: 'rgba(255,255,255,0.3)',
+                            borderRadius: '0 4px 4px 0',
+                          }}
+                        />
+                      </>
+                    )}
                   </div>
                 </div>
               </div>
@@ -374,36 +379,38 @@ export default function Timeline({ spans, onUpdateSpan, onExtractTimeline, extra
         </div>
       </div>
 
-      <div style={{ marginTop: 16 }}>
-        <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-muted)', marginBottom: 6 }}>
-          MANUAL POSITION INPUTS
+      {!readOnly && (
+        <div style={{ marginTop: 16 }}>
+          <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-muted)', marginBottom: 6 }}>
+            MANUAL POSITION INPUTS
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {localSpans.map(span => (
+              <div key={span.id} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13 }}>
+                <span style={{ width: 168, fontWeight: 700, color: colorForSpan(span).bg, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {span.seq_label} {span.span_text}
+                </span>
+                <label style={{ color: 'var(--text-muted)' }}>Start:</label>
+                <input
+                  type="number" min={0} max={100} step={0.1}
+                  value={span.tl_start}
+                  onChange={e => handleManualChange(span.id, 'tl_start', e.target.value)}
+                  onBlur={() => handleManualBlur(span.id)}
+                  style={{ width: 70, padding: '2px 6px', border: '1px solid var(--border-input)', borderRadius: 4, fontSize: 13 }}
+                />
+                <label style={{ color: 'var(--text-muted)' }}>End:</label>
+                <input
+                  type="number" min={0} max={100} step={0.1}
+                  value={span.tl_end}
+                  onChange={e => handleManualChange(span.id, 'tl_end', e.target.value)}
+                  onBlur={() => handleManualBlur(span.id)}
+                  style={{ width: 70, padding: '2px 6px', border: '1px solid var(--border-input)', borderRadius: 4, fontSize: 13 }}
+                />
+              </div>
+            ))}
+          </div>
         </div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-          {localSpans.map(span => (
-            <div key={span.id} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13 }}>
-              <span style={{ width: 168, fontWeight: 700, color: colorForSpan(span).bg, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                {span.seq_label} {span.span_text}
-              </span>
-              <label style={{ color: 'var(--text-muted)' }}>Start:</label>
-              <input
-                type="number" min={0} max={100} step={0.1}
-                value={span.tl_start}
-                onChange={e => handleManualChange(span.id, 'tl_start', e.target.value)}
-                onBlur={() => handleManualBlur(span.id)}
-                style={{ width: 70, padding: '2px 6px', border: '1px solid var(--border-input)', borderRadius: 4, fontSize: 13 }}
-              />
-              <label style={{ color: 'var(--text-muted)' }}>End:</label>
-              <input
-                type="number" min={0} max={100} step={0.1}
-                value={span.tl_end}
-                onChange={e => handleManualChange(span.id, 'tl_end', e.target.value)}
-                onBlur={() => handleManualBlur(span.id)}
-                style={{ width: 70, padding: '2px 6px', border: '1px solid var(--border-input)', borderRadius: 4, fontSize: 13 }}
-              />
-            </div>
-          ))}
-        </div>
-      </div>
+      )}
     </div>
   );
 }

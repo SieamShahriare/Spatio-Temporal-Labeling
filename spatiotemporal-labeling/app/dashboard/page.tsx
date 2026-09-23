@@ -157,6 +157,24 @@ export default function DashboardPage() {
             </button>
           )}
           <button
+            onClick={() => router.push('/completed')}
+            style={{
+              padding: '8px 16px',
+              background: '#16a34a',
+              color: '#fff',
+              border: 'none',
+              borderRadius: 6,
+              cursor: 'pointer',
+              fontWeight: 600,
+              fontSize: 13,
+              display: 'flex',
+              alignItems: 'center',
+              gap: 6,
+            }}
+          >
+            ✓ Completed Stems
+          </button>
+          <button
             onClick={() => router.push('/stems')}
             style={{
               padding: '8px 16px',

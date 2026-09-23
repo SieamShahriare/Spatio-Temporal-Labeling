@@ -366,6 +366,10 @@ export default function BatchDetailPage() {
                           alert('This batch has expired. Only submitted, completed, or blacklisted stems can be viewed.');
                           return;
                         }
+                        if (bs.status === 'done' && !isReviewer) {
+                          router.push(`/completed/${bs.id}`);
+                          return;
+                        }
                         const url = isReviewer
                           ? `/annotate/${batch.id}/${bs.id}?mode=review`
                           : `/annotate/${batch.id}/${bs.id}`;

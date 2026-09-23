@@ -137,7 +137,8 @@ export default function AnnotateBatchStemPage() {
   const handleDeleteSpan = useCallback(async (spanId: number) => {
     try {
       await deleteBatchSpan(stemId, spanId);
-      setSpans(prev => prev.filter(s => s.id !== spanId));
+      const updatedSpans = await listBatchSpans(stemId);
+      setSpans(updatedSpans);
       setMatrixData(null);
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : 'Failed to delete span.';
@@ -168,7 +169,8 @@ export default function AnnotateBatchStemPage() {
         }
       }
       if (created.length > 0) {
-        setSpans(prev => [...prev, ...created]);
+        const updatedSpans = await listBatchSpans(stemId);
+        setSpans(updatedSpans);
       }
       setSkippedCount(result.skipped.length);
     } catch (e: unknown) {
@@ -749,6 +751,7 @@ export default function AnnotateBatchStemPage() {
                   onUpdateSpan={handleUpdateSpan}
                   onExtractTimeline={handleExtractTimeline}
                   extractingTimeline={extractingTimeline}
+                  readOnly={isReadOnly}
                 />
               </div>
               <div style={{ flex: '1 1 35%', minWidth: 280, maxHeight: '85vh', overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 8, padding: 16, background: 'var(--surface-alt)' }}>
@@ -765,22 +768,24 @@ export default function AnnotateBatchStemPage() {
               <h2 style={sectionTitle}>Allen&apos;s Relation Matrix</h2>
               <div style={{ display: 'flex', gap: 8 }}>
                 <button onClick={() => setStep(2)} style={prevBtnStyle}>← Back</button>
-                <button
-                  onClick={handleSaveMatrix}
-                  disabled={saving}
-                  style={{
-                    padding: '6px 14px',
-                    background: saving ? 'var(--text-disabled)' : '#2563eb',
-                    color: '#fff',
-                    border: 'none',
-                    borderRadius: 6,
-                    cursor: saving ? 'not-allowed' : 'pointer',
-                    fontSize: 13,
-                    fontWeight: 500,
-                  }}
-                >
-                  {saving ? 'Saving…' : '↻ Save & Recompute'}
-                </button>
+                {!isReadOnly && (
+                  <button
+                    onClick={handleSaveMatrix}
+                    disabled={saving}
+                    style={{
+                      padding: '6px 14px',
+                      background: saving ? 'var(--text-disabled)' : '#2563eb',
+                      color: '#fff',
+                      border: 'none',
+                      borderRadius: 6,
+                      cursor: saving ? 'not-allowed' : 'pointer',
+                      fontSize: 13,
+                      fontWeight: 500,
+                    }}
+                  >
+                    {saving ? 'Saving…' : '↻ Save & Recompute'}
+                  </button>
+                )}
               </div>
             </div>
             <div style={{ display: 'flex', gap: 24, alignItems: 'flex-start' }}>
@@ -790,6 +795,7 @@ export default function AnnotateBatchStemPage() {
                     matrixData={matrixData}
                     onOverride={handleOverride}
                     onSave={handleSaveMatrix}
+                    readOnly={isReadOnly}
                   />
                 ) : (
                   <div style={{ padding: 24, textAlign: 'center' }}>

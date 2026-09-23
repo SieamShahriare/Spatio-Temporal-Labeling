@@ -5,8 +5,9 @@ import { MatrixData, ALLEN_RELATIONS, ALLEN_CODES } from '@/lib/types';
 
 interface Props {
   matrixData: MatrixData;
-  onOverride: (i: number, j: number, code: number) => void;
-  onSave: () => void;
+  onOverride?: (i: number, j: number, code: number) => void;
+  onSave?: () => void;
+  readOnly?: boolean;
 }
 
 const cellBg = (code: number): string => {
@@ -21,7 +22,7 @@ const cellColor = (code: number): string => {
   return 'var(--negative)';
 };
 
-export default function AllenMatrix({ matrixData, onOverride, onSave }: Props) {
+export default function AllenMatrix({ matrixData, onOverride, onSave, readOnly = false }: Props) {
   const [unlocked, setUnlocked] = useState(false);
   const { matrix, span_order, violations } = matrixData;
   const n = span_order.length;
@@ -37,7 +38,7 @@ export default function AllenMatrix({ matrixData, onOverride, onSave }: Props) {
   return (
     <div>
       {/* Violations banner */}
-      {violations.length > 0 && (
+      {violations.length > 0 ? (
         <div
              style={{
                background: 'var(--error-bg)',
@@ -53,44 +54,66 @@ export default function AllenMatrix({ matrixData, onOverride, onSave }: Props) {
             {violations.map((v, i) => <li key={i}>{v.message}</li>)}
           </ul>
         </div>
-      )}
+      ) : readOnly ? (
+        <div
+          style={{
+            background: 'var(--success-bg)',
+            border: '1px solid var(--success)',
+            borderRadius: 6,
+            padding: '6px 12px',
+            marginBottom: 12,
+            fontSize: 12,
+            color: 'var(--success)',
+            fontWeight: 600,
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 6,
+          }}
+        >
+          <span>✓</span> Transitive closure valid (0 violations)
+        </div>
+      ) : null}
 
       {/* Controls */}
-      <div style={{ display: 'flex', gap: 8, marginBottom: 12, alignItems: 'center' }}>
-        <button
-          onClick={() => setUnlocked(u => !u)}
-             style={{
-               padding: '6px 14px',
-               borderRadius: 6,
-               border: `1px solid ${unlocked ? '#f97316' : 'var(--border-input)'}`,
-               background: unlocked ? 'var(--negative-bg)' : 'var(--surface)',
-               color: unlocked ? 'var(--negative)' : 'var(--text-primary)',
-               cursor: 'pointer',
-               fontSize: 13,
-               fontWeight: 500,
-             }}
-        >
-          {unlocked ? '🔓 Matrix Unlocked (editing)' : '🔒 Unlock Matrix for Review'}
-        </button>
-        <button
-          onClick={onSave}
-             style={{
-               padding: '6px 14px',
-               borderRadius: 6,
-               border: '1px solid var(--info-border)',
-               background: 'var(--info-bg)',
-               color: 'var(--info)',
-               cursor: 'pointer',
-               fontSize: 13,
-               fontWeight: 500,
-             }}
-        >
-          ↻ Recompute from Timeline
-        </button>
-        <span style={{ fontSize: 12, color: 'var(--text-disabled)' }}>
-          Diagonal locked to 0. Lower triangle = inverse of upper.
-        </span>
-      </div>
+      {!readOnly && (
+        <div style={{ display: 'flex', gap: 8, marginBottom: 12, alignItems: 'center' }}>
+          <button
+            onClick={() => setUnlocked(u => !u)}
+            style={{
+              padding: '6px 14px',
+              borderRadius: 6,
+              border: `1px solid ${unlocked ? '#f97316' : 'var(--border-input)'}`,
+              background: unlocked ? 'var(--negative-bg)' : 'var(--surface)',
+              color: unlocked ? 'var(--negative)' : 'var(--text-primary)',
+              cursor: 'pointer',
+              fontSize: 13,
+              fontWeight: 500,
+            }}
+          >
+            {unlocked ? '🔓 Matrix Unlocked (editing)' : '🔒 Unlock Matrix for Review'}
+          </button>
+          {onSave && (
+            <button
+              onClick={onSave}
+              style={{
+                padding: '6px 14px',
+                borderRadius: 6,
+                border: '1px solid var(--info-border)',
+                background: 'var(--info-bg)',
+                color: 'var(--info)',
+                cursor: 'pointer',
+                fontSize: 13,
+                fontWeight: 500,
+              }}
+            >
+              ↻ Recompute from Timeline
+            </button>
+          )}
+          <span style={{ fontSize: 12, color: 'var(--text-disabled)' }}>
+            Diagonal locked to 0. Lower triangle = inverse of upper.
+          </span>
+        </div>
+      )}
 
       {/* Matrix table */}
       <div style={{ overflowX: 'auto' }}>
@@ -162,10 +185,10 @@ export default function AllenMatrix({ matrixData, onOverride, onSave }: Props) {
                            textAlign: 'center',
                          }}
                     >
-                      {unlocked ? (
+                      {unlocked && !readOnly && onOverride ? (
                         <select
                           value={code}
-                          onChange={e => onOverride(i, j, parseInt(e.target.value))}
+                          onChange={e => onOverride?.(i, j, parseInt(e.target.value))}
                           style={{
                             border: 'none',
                             background: 'transparent',
