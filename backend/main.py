@@ -27,6 +27,7 @@ from models import (
     BatchSpanCreate, BatchSpanOut,
     ConflictResponse,
     ReviewDecisionRequest, StemReviewOut, PendingReviewItemOut,
+    BatchStemUpdateText,
 )
 from auth import (
     hash_password, verify_password,
@@ -480,7 +481,7 @@ async def signup(body: SignupRequest, response: Response):
     if existing:
         raise HTTPException(status_code=409, detail="Email already registered")
     pw_hash = hash_password(body.password)
-    role = "annotator"  # default as requested
+    role = body.role if body.role in ("annotator", "reviewer", "admin") else "annotator"
     row = await pool.fetchrow(
         "INSERT INTO users (email, username, password_hash, role) VALUES ($1, $2, $3, $4) RETURNING id, email, username, role, created_at",
         body.email, body.username, pw_hash, role
@@ -600,51 +601,49 @@ async def list_stems(
     like = f"%{search.strip()}%" if search else None
     offset = (page - 1) * page_size
 
-    base_where = ""
-    params = [page_size, offset]
-    idx = 3
+    where_clauses = ["1=1"]
+    filter_params = []
 
     if like:
-        base_where = f"""
-            AND (
-                s.text ILIKE ${idx}
-                OR CAST(s.id AS TEXT) ILIKE ${idx}
-                OR EXISTS (
-                    SELECT 1 FROM batch_stems bs
-                    JOIN batches b ON b.id = bs.batch_id
-                    JOIN users u ON u.id = b.owner_id
-                    WHERE bs.stem_id = s.id
-                      AND (u.username ILIKE ${idx} OR u.email ILIKE ${idx})
-                )
-                OR EXISTS (
-                    SELECT 1 FROM batch_stems bs
-                    JOIN users u ON u.id = bs.completed_by
-                    WHERE bs.stem_id = s.id
-                      AND bs.status = 'done'
-                      AND (u.username ILIKE ${idx} OR u.email ILIKE ${idx})
-                )
+        filter_params.append(like)
+        idx = len(filter_params)
+        where_clauses.append(f"""(
+            s.text ILIKE ${idx}
+            OR CAST(s.id AS TEXT) ILIKE ${idx}
+            OR EXISTS (
+                SELECT 1 FROM batch_stems bs
+                JOIN batches b ON b.id = bs.batch_id
+                JOIN users u ON u.id = b.owner_id
+                WHERE bs.stem_id = s.id
+                  AND (u.username ILIKE ${idx} OR u.email ILIKE ${idx})
             )
-        """
-        params.append(like)
-        idx += 1
+            OR EXISTS (
+                SELECT 1 FROM batch_stems bs
+                JOIN users u ON u.id = bs.completed_by
+                WHERE bs.stem_id = s.id
+                  AND bs.status = 'done'
+                  AND (u.username ILIKE ${idx} OR u.email ILIKE ${idx})
+            )
+        )""")
 
-    status_filter = ""
     if status == "available":
-        status_filter = "AND s.is_blacklisted = FALSE AND act.owner_id IS NULL AND dn.completed_by IS NULL AND pnd.batch_stem_id IS NULL"
+        where_clauses.append("s.is_blacklisted = FALSE AND act.owner_id IS NULL AND dn.completed_by IS NULL AND pnd.batch_stem_id IS NULL")
     elif status == "booked":
-        status_filter = "AND s.is_blacklisted = FALSE AND act.owner_id IS NOT NULL AND act.status <> 're-evaluate'"
+        where_clauses.append("s.is_blacklisted = FALSE AND act.owner_id IS NOT NULL AND act.status <> 're-evaluate'")
     elif status == "pending-review":
-        status_filter = "AND pnd.batch_stem_id IS NOT NULL"
+        where_clauses.append("pnd.batch_stem_id IS NOT NULL")
     elif status == "re-evaluate":
-        status_filter = "AND ((act.owner_id IS NOT NULL AND act.status = 're-evaluate') OR (act.owner_id IS NULL AND rev.decision = 're-evaluate' AND dn.completed_by IS NULL))"
+        where_clauses.append("((act.owner_id IS NOT NULL AND act.status = 're-evaluate') OR (act.owner_id IS NULL AND rev.decision = 're-evaluate' AND dn.completed_by IS NULL))")
     elif status == "completed":
-        status_filter = "AND dn.completed_by IS NOT NULL"
+        where_clauses.append("dn.completed_by IS NOT NULL")
     elif status == "blacklisted":
-        status_filter = "AND s.is_blacklisted = TRUE"
+        where_clauses.append("s.is_blacklisted = TRUE")
     elif status == "mine" and user:
-        status_filter = f"AND (act.owner_id = ${idx} OR pnd.owner_id = ${idx})"
-        params.append(user["id"])
-        idx += 1
+        filter_params.append(user["id"])
+        idx = len(filter_params)
+        where_clauses.append(f"(act.owner_id = ${idx} OR pnd.owner_id = ${idx})")
+
+    where_sql = " AND ".join(f"({w})" for w in where_clauses)
 
     count_sql = f"""
         SELECT COUNT(*) FROM stems s
@@ -675,11 +674,14 @@ async def list_stems(
             WHERE sr.stem_id = s.id
             ORDER BY sr.created_at DESC LIMIT 1
         ) rev ON true
-        WHERE 1=1 {base_where} {status_filter}
+        WHERE {where_sql}
     """
 
-    count_rows = await pool.fetch(count_sql, *params[2:])
+    count_rows = await pool.fetch(count_sql, *filter_params)
     total = count_rows[0]["count"] if count_rows else 0
+
+    limit_idx = len(filter_params) + 1
+    offset_idx = len(filter_params) + 2
 
     data_sql = f"""
         SELECT s.id, s.text, s.word_count, s.is_blacklisted, s.blacklist_reason,
@@ -731,12 +733,12 @@ async def list_stems(
         LEFT JOIN users u1 ON u1.id = act.owner_id
         LEFT JOIN users u2 ON u2.id = dn.completed_by
         LEFT JOIN users u3 ON u3.id = pnd.owner_id
-        WHERE 1=1 {base_where} {status_filter}
+        WHERE {where_sql}
         ORDER BY s.id
-        LIMIT $1 OFFSET $2
+        LIMIT ${limit_idx} OFFSET ${offset_idx}
     """
 
-    data_rows = await pool.fetch(data_sql, *params)
+    data_rows = await pool.fetch(data_sql, *filter_params, page_size, offset)
 
     items = []
     for r in data_rows:
@@ -1219,20 +1221,32 @@ async def get_batch_stem(batch_stem_id: int, request: Request):
     }
 
 
-@app.post("/batch-stems/{batch_stem_id}/spans", status_code=201)
-async def create_batch_span(batch_stem_id: int, body: BatchSpanCreate, request: Request, user=Depends(get_current_user)):
-    validate_csrf(request)
-    pool = await get_pool()
+async def _get_batch_stem_for_edit(pool, batch_stem_id: int, user: dict, action_name: str = "edit"):
+    is_reviewer_or_admin = user.get("role") in ("reviewer", "admin")
     bs = await pool.fetchrow(
         "SELECT bs.*, b.owner_id, b.expires_at FROM batch_stems bs JOIN batches b ON b.id = bs.batch_id WHERE bs.id = $1",
         batch_stem_id
     )
-    if not bs or bs["owner_id"] != user["id"]:
+    if not bs:
         raise HTTPException(status_code=404, detail="Batch stem not found")
-    if bs["status"] in ("pending-review", "done", "blacklisted"):
-        raise HTTPException(status_code=400, detail=f"Cannot add spans while stem status is '{bs['status']}'")
-    if _ensure_aware(bs["expires_at"]) <= _now():
-        raise HTTPException(status_code=423, detail="Lock expired")
+    if not is_reviewer_or_admin:
+        if bs["owner_id"] != user["id"]:
+            raise HTTPException(status_code=404, detail="Batch stem not found")
+        if bs["status"] in ("pending-review", "done", "blacklisted"):
+            raise HTTPException(status_code=400, detail=f"Cannot {action_name} while stem status is '{bs['status']}'")
+        if _ensure_aware(bs["expires_at"]) <= _now():
+            raise HTTPException(status_code=423, detail="Lock expired")
+    else:
+        if bs["status"] == "blacklisted":
+            raise HTTPException(status_code=400, detail=f"Cannot {action_name} a blacklisted stem")
+    return bs, is_reviewer_or_admin
+
+
+@app.post("/batch-stems/{batch_stem_id}/spans", status_code=201)
+async def create_batch_span(batch_stem_id: int, body: BatchSpanCreate, request: Request, user=Depends(get_current_user)):
+    validate_csrf(request)
+    pool = await get_pool()
+    bs, is_reviewer_or_admin = await _get_batch_stem_for_edit(pool, batch_stem_id, user, "add spans")
     existing = await pool.fetch(
         "SELECT * FROM spans WHERE batch_stem_id = $1 ORDER BY created_at", batch_stem_id
     )
@@ -1246,9 +1260,13 @@ async def create_batch_span(batch_stem_id: int, body: BatchSpanCreate, request: 
         body.span_text, body.char_start, body.char_end,
         body.tl_start, body.tl_end, body.source
     )
-    if bs["status"] in ("not_started", "re-evaluate"):
+    if not is_reviewer_or_admin and bs["status"] in ("not_started", "re-evaluate"):
         await pool.execute(
             "UPDATE batch_stems SET status = 'in_progress', updated_at = now() WHERE id = $1", batch_stem_id
+        )
+    else:
+        await pool.execute(
+            "UPDATE batch_stems SET updated_at = now() WHERE id = $1", batch_stem_id
         )
     return _batch_span_to_out(dict(row), seq_label, batch_stem_id)
 
@@ -1281,16 +1299,7 @@ async def list_batch_spans(batch_stem_id: int, request: Request):
 async def update_batch_span(batch_stem_id: int, span_id: int, body: SpanUpdate, request: Request, user=Depends(get_current_user)):
     validate_csrf(request)
     pool = await get_pool()
-    bs = await pool.fetchrow(
-        "SELECT bs.*, b.owner_id, b.expires_at FROM batch_stems bs JOIN batches b ON b.id = bs.batch_id WHERE bs.id = $1",
-        batch_stem_id
-    )
-    if not bs or bs["owner_id"] != user["id"]:
-        raise HTTPException(status_code=404, detail="Batch stem not found")
-    if bs["status"] in ("pending-review", "done", "blacklisted"):
-        raise HTTPException(status_code=400, detail=f"Cannot update spans while stem status is '{bs['status']}'")
-    if _ensure_aware(bs["expires_at"]) <= _now():
-        raise HTTPException(status_code=423, detail="Lock expired")
+    bs, is_reviewer_or_admin = await _get_batch_stem_for_edit(pool, batch_stem_id, user, "update spans")
     span = await pool.fetchrow("SELECT * FROM spans WHERE id = $1 AND batch_stem_id = $2", span_id, batch_stem_id)
     if not span:
         raise HTTPException(status_code=404, detail="Span not found")
@@ -1300,6 +1309,7 @@ async def update_batch_span(batch_stem_id: int, span_id: int, body: SpanUpdate, 
         "UPDATE spans SET tl_start=$1, tl_end=$2 WHERE id=$3 RETURNING *",
         tl_start, tl_end, span_id
     )
+    await pool.execute("UPDATE batch_stems SET updated_at = now() WHERE id = $1", batch_stem_id)
     return _batch_span_to_out(dict(updated), span["seq_label"], batch_stem_id)
 
 
@@ -1307,20 +1317,12 @@ async def update_batch_span(batch_stem_id: int, span_id: int, body: SpanUpdate, 
 async def delete_batch_span(batch_stem_id: int, span_id: int, request: Request, user=Depends(get_current_user)):
     validate_csrf(request)
     pool = await get_pool()
-    bs = await pool.fetchrow(
-        "SELECT bs.*, b.owner_id, b.expires_at FROM batch_stems bs JOIN batches b ON b.id = bs.batch_id WHERE bs.id = $1",
-        batch_stem_id
-    )
-    if not bs or bs["owner_id"] != user["id"]:
-        raise HTTPException(status_code=404, detail="Batch stem not found")
-    if bs["status"] in ("pending-review", "done", "blacklisted"):
-        raise HTTPException(status_code=400, detail=f"Cannot delete spans while stem status is '{bs['status']}'")
-    if _ensure_aware(bs["expires_at"]) <= _now():
-        raise HTTPException(status_code=423, detail="Lock expired")
+    bs, is_reviewer_or_admin = await _get_batch_stem_for_edit(pool, batch_stem_id, user, "delete spans")
     span = await pool.fetchrow("SELECT * FROM spans WHERE id = $1 AND batch_stem_id = $2", span_id, batch_stem_id)
     if not span:
         raise HTTPException(status_code=404, detail="Span not found")
     await pool.execute("DELETE FROM spans WHERE id = $1", span_id)
+    await pool.execute("UPDATE batch_stems SET updated_at = now() WHERE id = $1", batch_stem_id)
     return None
 
 
@@ -1328,16 +1330,7 @@ async def delete_batch_span(batch_stem_id: int, span_id: int, request: Request, 
 async def save_batch_matrix(batch_stem_id: int, request: Request, user=Depends(get_current_user)):
     validate_csrf(request)
     pool = await get_pool()
-    bs = await pool.fetchrow(
-        "SELECT bs.*, b.owner_id, b.expires_at FROM batch_stems bs JOIN batches b ON b.id = bs.batch_id WHERE bs.id = $1",
-        batch_stem_id
-    )
-    if not bs or bs["owner_id"] != user["id"]:
-        raise HTTPException(status_code=404, detail="Batch stem not found")
-    if bs["status"] in ("pending-review", "done", "blacklisted"):
-        raise HTTPException(status_code=400, detail=f"Cannot modify matrix while stem status is '{bs['status']}'")
-    if _ensure_aware(bs["expires_at"]) <= _now():
-        raise HTTPException(status_code=423, detail="Lock expired")
+    bs, is_reviewer_or_admin = await _get_batch_stem_for_edit(pool, batch_stem_id, user, "modify matrix")
     spans = await pool.fetch(
         "SELECT * FROM spans WHERE batch_stem_id = $1 AND label_type = 'Event' ORDER BY created_at",
         batch_stem_id
@@ -1374,6 +1367,7 @@ async def save_batch_matrix(batch_stem_id: int, request: Request, user=Depends(g
             records
         )
 
+    await pool.execute("UPDATE batch_stems SET updated_at = now() WHERE id = $1", batch_stem_id)
     return {"ok": True, "matrix": matrix, "span_order": span_order}
 
 
@@ -1399,20 +1393,64 @@ async def get_batch_matrix(batch_stem_id: int, request: Request):
     return {"matrix": matrix, "span_order": span_order, "violations": violations}
 
 
+@app.patch("/batch-stems/{batch_stem_id}/stem")
+async def update_batch_stem_text(
+    batch_stem_id: int,
+    body: BatchStemUpdateText,
+    request: Request,
+    user=Depends(get_current_user),
+):
+    validate_csrf(request)
+    new_text = body.stem_text.strip()
+    if not new_text:
+        raise HTTPException(status_code=400, detail="Stem text cannot be empty")
+
+    pool = await get_pool()
+    bs, is_reviewer_or_admin = await _get_batch_stem_for_edit(pool, batch_stem_id, user, "update stem text")
+    new_word_count = len(new_text.split())
+
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            # Update stem text and word_count in stems table
+            await conn.execute(
+                "UPDATE stems SET text = $1, word_count = $2 WHERE id = $3",
+                new_text,
+                new_word_count,
+                bs["stem_id"],
+            )
+
+            # Clear existing spans, relations, and matrix snapshots for this batch stem
+            await conn.execute(
+                "DELETE FROM relations WHERE batch_stem_id = $1", batch_stem_id
+            )
+            await conn.execute(
+                "DELETE FROM matrix_snapshots WHERE batch_stem_id = $1",
+                batch_stem_id,
+            )
+            await conn.execute(
+                "DELETE FROM spans WHERE batch_stem_id = $1", batch_stem_id
+            )
+
+            # Touch updated_at on batch_stem
+            await conn.execute(
+                "UPDATE batch_stems SET updated_at = now() WHERE id = $1",
+                batch_stem_id,
+            )
+
+    return {
+        "ok": True,
+        "batch_stem_id": batch_stem_id,
+        "stem_id": bs["stem_id"],
+        "stem_text": new_text,
+        "word_count": new_word_count,
+    }
+
+
 @app.patch("/batch-stems/{batch_stem_id}/matrix/override")
 async def override_batch_matrix(batch_stem_id: int, body: MatrixOverride, request: Request, user=Depends(get_current_user)):
     validate_csrf(request)
     pool = await get_pool()
-    bs = await pool.fetchrow(
-        "SELECT bs.*, b.owner_id, b.expires_at FROM batch_stems bs JOIN batches b ON b.id = bs.batch_id WHERE bs.id = $1",
-        batch_stem_id
-    )
-    if not bs or bs["owner_id"] != user["id"]:
-        raise HTTPException(status_code=404, detail="Batch stem not found")
-    if bs["status"] in ("pending-review", "done", "blacklisted"):
-        raise HTTPException(status_code=400, detail=f"Cannot override matrix while stem status is '{bs['status']}'")
-    if _ensure_aware(bs["expires_at"]) <= _now():
-        raise HTTPException(status_code=423, detail="Lock expired")
+    bs, is_reviewer_or_admin = await _get_batch_stem_for_edit(pool, batch_stem_id, user, "override matrix")
     spans = await pool.fetch(
         "SELECT * FROM spans WHERE batch_stem_id = $1 AND label_type = 'Event' ORDER BY created_at",
         batch_stem_id
@@ -1457,6 +1495,7 @@ async def override_batch_matrix(batch_stem_id: int, body: MatrixOverride, reques
            DO UPDATE SET relation_code=$4, is_override=TRUE""",
         batch_stem_id, sj_id, si_id, inv
     )
+    await pool.execute("UPDATE batch_stems SET updated_at = now() WHERE id = $1", batch_stem_id)
     return {"ok": True, "matrix": matrix}
 
 
@@ -1645,7 +1684,8 @@ async def review_batch_stem(
                 await conn.execute(
                     """
                     UPDATE batch_stems
-                    SET status = 'released', reviewer_id = $1, reviewed_at = now(), updated_at = now()
+                    SET status = 'released', completed_by = NULL, completed_at = NULL,
+                        reviewer_id = $1, reviewed_at = now(), updated_at = now()
                     WHERE id = $2
                     """,
                     reviewer["id"], batch_stem_id
@@ -1823,8 +1863,9 @@ async def export_batch_stem_json(batch_stem_id: int, request: Request):
     bs = await pool.fetchrow("SELECT * FROM batch_stems WHERE id=$1", batch_stem_id)
     if not bs:
         raise HTTPException(status_code=404, detail="Batch stem not found")
-    batch = await pool.fetchrow("SELECT * FROM batches WHERE id=$1 AND owner_id=$2", bs["batch_id"], user["id"])
-    if not batch:
+    is_reviewer_or_admin = user.get("role") in ("reviewer", "admin")
+    batch = await pool.fetchrow("SELECT * FROM batches WHERE id=$1", bs["batch_id"])
+    if not batch or (batch["owner_id"] != user["id"] and not is_reviewer_or_admin):
         raise HTTPException(status_code=404, detail="Batch not found")
     stem_row = await pool.fetchrow("SELECT text FROM stems WHERE id=$1", bs["stem_id"])
     stem_text = stem_row["text"] if stem_row else ""
@@ -1992,11 +2033,22 @@ async def extract_timeline(body: ExtractTimelineRequest, request: Request, user=
     else:
         batch_stem_id = -session_id
         bs = await pool.fetchrow(
-            "SELECT bs.*, s.text AS stem_text FROM batch_stems bs JOIN stems s ON s.id = bs.stem_id WHERE bs.id=$1",
+            "SELECT bs.*, s.text AS stem_text, b.owner_id, b.expires_at FROM batch_stems bs JOIN stems s ON s.id = bs.stem_id JOIN batches b ON b.id = bs.batch_id WHERE bs.id=$1",
             batch_stem_id
         )
         if not bs:
             raise HTTPException(status_code=404, detail="Batch stem not found")
+        is_reviewer_or_admin = user.get("role") in ("reviewer", "admin")
+        if not is_reviewer_or_admin:
+            if bs["owner_id"] != user["id"]:
+                raise HTTPException(status_code=404, detail="Batch stem not found")
+            if bs["status"] in ("pending-review", "done", "blacklisted"):
+                raise HTTPException(status_code=400, detail=f"Cannot update timeline while stem status is '{bs['status']}'")
+            if _ensure_aware(bs["expires_at"]) <= _now():
+                raise HTTPException(status_code=423, detail="Lock expired")
+        else:
+            if bs["status"] == "blacklisted":
+                raise HTTPException(status_code=400, detail="Cannot edit a blacklisted stem")
         event_rows = await pool.fetch(
             "SELECT * FROM spans WHERE batch_stem_id = $1 AND label_type = 'Event' ORDER BY created_at",
             batch_stem_id
@@ -2083,6 +2135,9 @@ async def extract_timeline(body: ExtractTimelineRequest, request: Request, user=
             "tl_end": end,
         })
 
+    if session_id < 0:
+        await pool.execute("UPDATE batch_stems SET updated_at = now() WHERE id = $1", -session_id)
+
     return ExtractTimelineResponse(updated=updated, skipped=skipped).model_dump()
 
 
@@ -2099,10 +2154,19 @@ async def llm_label_and_timeline(body: LLMLabelAndTimelineRequest, request: Requ
         "SELECT bs.*, s.text AS stem_text, b.owner_id, b.expires_at FROM batch_stems bs JOIN stems s ON s.id = bs.stem_id JOIN batches b ON b.id = bs.batch_id WHERE bs.id=$1",
         batch_stem_id
     )
-    if not bs or bs["owner_id"] != user["id"]:
+    if not bs:
         raise HTTPException(status_code=404, detail="Batch stem not found")
-    if _ensure_aware(bs["expires_at"]) <= _now():
-        raise HTTPException(status_code=423, detail="Lock expired")
+    is_reviewer_or_admin = user.get("role") in ("reviewer", "admin")
+    if not is_reviewer_or_admin:
+        if bs["owner_id"] != user["id"]:
+            raise HTTPException(status_code=404, detail="Batch stem not found")
+        if bs["status"] in ("pending-review", "done", "blacklisted"):
+            raise HTTPException(status_code=400, detail=f"Cannot run LLM while stem status is '{bs['status']}'")
+        if _ensure_aware(bs["expires_at"]) <= _now():
+            raise HTTPException(status_code=423, detail="Lock expired")
+    else:
+        if bs["status"] == "blacklisted":
+            raise HTTPException(status_code=400, detail="Cannot edit a blacklisted stem")
     stem_text = bs["stem_text"]
 
     async with pool.acquire() as conn:
@@ -2275,6 +2339,15 @@ async def llm_label_and_timeline(body: LLMLabelAndTimelineRequest, request: Requ
                 await conn.executemany(
                     "UPDATE spans SET tl_start=$1, tl_end=$2, source='llm' WHERE id=$3",
                     to_update_positions
+                )
+
+            if not is_reviewer_or_admin and bs["status"] in ("not_started", "re-evaluate"):
+                await conn.execute(
+                    "UPDATE batch_stems SET status = 'in_progress', updated_at = now() WHERE id = $1", batch_stem_id
+                )
+            else:
+                await conn.execute(
+                    "UPDATE batch_stems SET updated_at = now() WHERE id = $1", batch_stem_id
                 )
 
             return LLMLabelAndTimelineResponse(

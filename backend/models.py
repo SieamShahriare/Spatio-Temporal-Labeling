@@ -274,3 +274,7 @@ class PendingReviewItemOut(BaseModel):
     event_count: int = 0
     latest_comment: Optional[str] = None
 
+
+class BatchStemUpdateText(BaseModel):
+    stem_text: str
+

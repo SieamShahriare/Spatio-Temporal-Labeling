@@ -146,6 +146,12 @@ export const exportBatchStemJson = (batchStemId: number) =>
 export const getBatchStem = (id: number) =>
   apiFetch(`/batch-stems/${id}`);
 
+export const updateBatchStemText = (batchStemId: number, stemText: string) =>
+  apiFetch(`/batch-stems/${batchStemId}/stem`, {
+    method: 'PATCH',
+    body: JSON.stringify({ stem_text: stemText }),
+  });
+
 export const createBatchSpan = (batchStemId: number, data: {
   label_type: string;
   span_text: string;

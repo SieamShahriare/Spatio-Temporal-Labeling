@@ -23,6 +23,7 @@ import {
   extractEvents,
   extractTimeline,
   llmLabelAndTimeline,
+  updateBatchStemText,
 } from '@/lib/api';
 import { BatchStemDetail, BatchSpanOut, MatrixData, ExtractEventsResponse, ExtractTimelineResponse, LLMLabelAndTimelineResponse, StemReview } from '@/lib/types';
 import { useAuth } from '@/lib/AuthContext';
@@ -43,6 +44,10 @@ export default function AnnotateBatchStemPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [reviewing, setReviewing] = useState(false);
+  const [isEditingStem, setIsEditingStem] = useState(false);
+  const [stemEditText, setStemEditText] = useState('');
+  const [savingStem, setSavingStem] = useState(false);
+  const [successMessage, setSuccessMessage] = useState('');
   const [showAnnotatorGuide, setShowAnnotatorGuide] = useState(false);
   const [extracting, setExtracting] = useState(false);
   const [extractingTimeline, setExtractingTimeline] = useState(false);
@@ -292,6 +297,54 @@ export default function AnnotateBatchStemPage() {
     }
   }, [stemId, router]);
 
+  const handleStartEditStem = useCallback(() => {
+    if (!stem) return;
+    setStemEditText(stem.stem_text);
+    setIsEditingStem(true);
+    setError('');
+    setSuccessMessage('');
+  }, [stem]);
+
+  const handleCancelEditStem = useCallback(() => {
+    setIsEditingStem(false);
+    setStemEditText('');
+  }, []);
+
+  const handleSaveStemText = useCallback(async () => {
+    const trimmed = stemEditText.trim();
+    if (!trimmed) {
+      setError('Stem text cannot be empty.');
+      return;
+    }
+    if (trimmed === stem?.stem_text) {
+      setIsEditingStem(false);
+      return;
+    }
+    if (spans.length > 0) {
+      const confirmed = confirm(
+        'Modifying the stem text will reset all existing Event and Timeline annotations for this stem because text offsets change. Do you want to proceed?'
+      );
+      if (!confirmed) return;
+    }
+
+    setSavingStem(true);
+    setError('');
+    try {
+      const res = await updateBatchStemText(stemId, trimmed);
+      setStem(prev => prev ? { ...prev, stem_text: res.stem_text, word_count: res.word_count } : prev);
+      setSpans([]);
+      setMatrixData(null);
+      setIsEditingStem(false);
+      setSuccessMessage('Stem text updated successfully. Existing annotations were reset.');
+      setTimeout(() => setSuccessMessage(''), 4000);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : 'Failed to update stem text.';
+      setError(msg);
+    } finally {
+      setSavingStem(false);
+    }
+  }, [stemEditText, stem, spans.length, stemId]);
+
   const isReviewMode = searchParams?.get('mode') === 'review' || user?.role === 'reviewer';
   const isReadOnly = !isReviewMode && (stem?.status === 'pending-review' || stem?.status === 'done' || stem?.status === 'blacklisted');
 
@@ -464,7 +517,7 @@ export default function AnnotateBatchStemPage() {
               )}
             </div>
 
-            {!isReviewMode && !isReadOnly && (
+            {!isReadOnly && (
               <button
                 onClick={handleLLMLabelAndTimeline}
                 disabled={extractingBoth}
@@ -486,6 +539,24 @@ export default function AnnotateBatchStemPage() {
         </div>
 
         <MethodologyGuide isOpen={showAnnotatorGuide} onClose={() => setShowAnnotatorGuide(false)} />
+
+        {successMessage && (
+          <div style={{
+            background: 'var(--success-bg)',
+            border: '1px solid var(--success)',
+            borderRadius: 6,
+            padding: '8px 12px',
+            marginBottom: 16,
+            fontSize: 13,
+            color: 'var(--success)',
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+          }}>
+            <span>✓ {successMessage}</span>
+            <button onClick={() => setSuccessMessage('')} style={{ marginLeft: 8, background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-disabled)' }}>×</button>
+          </div>
+        )}
 
         {error && (
           <div style={{
@@ -531,9 +602,109 @@ export default function AnnotateBatchStemPage() {
           ))}
         </div>
 
-        <div style={{ background: 'var(--surface-alt)', border: '1px solid var(--border)', borderRadius: 8, padding: 12, marginBottom: 20, fontSize: 14, color: 'var(--text-primary)' }}>
-          <strong style={{ fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 4 }}>STEM TEXT</strong>
-          {stem.stem_text}
+        <div style={{
+          background: 'var(--surface-alt)',
+          border: '1px solid var(--border)',
+          borderRadius: 8,
+          padding: 16,
+          marginBottom: 20,
+          fontSize: 14,
+          color: 'var(--text-primary)',
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+            <strong style={{ fontSize: 12, color: 'var(--text-muted)', letterSpacing: '0.05em' }}>
+              STEM TEXT {stem.word_count ? `(${stem.word_count} words)` : ''}
+            </strong>
+            {!isReadOnly && !isEditingStem && (
+              <button
+                onClick={handleStartEditStem}
+                style={{
+                  background: 'none',
+                  border: '1px solid var(--border)',
+                  borderRadius: 4,
+                  padding: '4px 10px',
+                  cursor: 'pointer',
+                  fontSize: 12,
+                  fontWeight: 600,
+                  color: '#2563eb',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 4,
+                }}
+                title="Edit stem text"
+              >
+                ✏️ Edit Stem
+              </button>
+            )}
+          </div>
+
+          {isEditingStem ? (
+            <div>
+              <textarea
+                value={stemEditText}
+                onChange={e => setStemEditText(e.target.value)}
+                disabled={savingStem}
+                rows={5}
+                style={{
+                  width: '100%',
+                  padding: 10,
+                  borderRadius: 6,
+                  border: '1px solid var(--border-input)',
+                  fontFamily: 'inherit',
+                  fontSize: 14,
+                  lineHeight: 1.5,
+                  background: 'var(--surface)',
+                  color: 'var(--text-primary)',
+                  boxSizing: 'border-box',
+                }}
+              />
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 6, fontSize: 12, color: 'var(--text-muted)' }}>
+                <span>
+                  {stemEditText.trim().length} chars · {stemEditText.trim() ? stemEditText.trim().split(/\s+/).length : 0} words
+                </span>
+                {spans.length > 0 && (
+                  <span style={{ color: '#d97706', fontWeight: 600 }}>
+                    ⚠️ Modifying text will reset {spans.length} existing annotation span{spans.length > 1 ? 's' : ''}.
+                  </span>
+                )}
+              </div>
+              <div style={{ display: 'flex', gap: 8, marginTop: 10, justifyContent: 'flex-end' }}>
+                <button
+                  onClick={handleCancelEditStem}
+                  disabled={savingStem}
+                  style={{
+                    padding: '6px 12px',
+                    borderRadius: 6,
+                    border: '1px solid var(--border-input)',
+                    background: 'var(--surface)',
+                    cursor: savingStem ? 'not-allowed' : 'pointer',
+                    fontSize: 13,
+                    color: 'var(--text-primary)',
+                  }}
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleSaveStemText}
+                  disabled={savingStem}
+                  style={{
+                    padding: '6px 14px',
+                    borderRadius: 6,
+                    border: 'none',
+                    background: '#2563eb',
+                    color: '#fff',
+                    cursor: savingStem ? 'not-allowed' : 'pointer',
+                    fontSize: 13,
+                    fontWeight: 600,
+                  }}
+                >
+                  {savingStem ? 'Saving…' : 'Save Changes'}
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div style={{ whiteSpace: 'pre-wrap', lineHeight: 1.6 }}>{stem.stem_text}</div>
+          )}
         </div>
 
         {step === 1 && (
