@@ -406,7 +406,8 @@ export default function DashboardPage() {
                               <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 8, fontWeight: 600 }}>STEMS</div>
                               <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                                 {detailData.stems.map(bs => {
-                                  const isReviewer = user?.role === 'reviewer' || user?.role === 'admin';
+                                  const isOwner = detailData.owner_id === user?.id;
+                                  const isReviewer = (user?.role === 'reviewer' || user?.role === 'admin') && !isOwner;
                                   let badgeBg = 'var(--surface-alt)';
                                   let badgeColor = 'var(--text-muted)';
                                   let statusLabel = bs.status.replace('_', ' ');

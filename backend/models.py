@@ -145,6 +145,8 @@ class StemOut(BaseModel):
     locked_until: Optional[datetime] = None
     completed_by: Optional[Dict[str, Any]] = None
     completed_at: Optional[datetime] = None
+    completed_batch_stem_id: Optional[int] = None
+    completed_batch_id: Optional[int] = None
     is_blacklisted: bool = False
     blacklist_reason: Optional[str] = None
     blacklisted_by: Optional[Dict[str, Any]] = None
@@ -154,6 +156,30 @@ class StemOut(BaseModel):
 
 class StemsListResponse(BaseModel):
     items: List[StemOut]
+    total: int
+    page: int
+    page_size: int
+
+
+class CompletedStemItem(BaseModel):
+    batch_stem_id: int
+    batch_id: int
+    batch_name: str
+    stem_id: int
+    stem_text: str
+    word_count: int
+    status: str = "done"
+    completed_by: Optional[Dict[str, Any]] = None
+    completed_at: Optional[datetime] = None
+    reviewer: Optional[Dict[str, Any]] = None
+    reviewed_at: Optional[datetime] = None
+    event_count: int = 0
+    time_count: int = 0
+    latest_review: Optional[Dict[str, Any]] = None
+
+
+class CompletedStemsResponse(BaseModel):
+    items: List[CompletedStemItem]
     total: int
     page: int
     page_size: int

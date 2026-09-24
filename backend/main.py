@@ -23,6 +23,7 @@ from models import (
     LLMLabelAndTimelineRequest, LLMLabelAndTimelineResponse,
     SignupRequest, LoginRequest, UserOut, UserRoleUpdate, AuthMeResponse,
     StemOut, StemsListResponse, StemsImportResponse,
+    CompletedStemItem, CompletedStemsResponse,
     BatchCreate, BatchOut, BatchDetailOut,
     BatchSpanCreate, BatchSpanOut,
     ConflictResponse,
@@ -153,6 +154,30 @@ async def _get_event_spans(pool, session_id: int):
     )
 
 
+async def _resequence_spans(pool, batch_stem_id: Optional[int] = None, session_id: Optional[int] = None):
+    """
+    Ensures spans are numbered sequentially (E1, E2... for Event, T1, T2... for Time)
+    without gaps or duplicates, ordered by created_at, id.
+    """
+    for label_type, prefix in [("Event", "E"), ("Time", "T")]:
+        if batch_stem_id is not None:
+            spans = await pool.fetch(
+                "SELECT id, seq_label FROM spans WHERE batch_stem_id = $1 AND label_type = $2 ORDER BY created_at, id",
+                batch_stem_id, label_type
+            )
+        elif session_id is not None:
+            spans = await pool.fetch(
+                "SELECT id, seq_label FROM spans WHERE session_id = $1 AND label_type = $2 ORDER BY created_at, id",
+                session_id, label_type
+            )
+        else:
+            return
+        for idx, s in enumerate(spans, start=1):
+            expected = f"{prefix}{idx}"
+            if s["seq_label"] != expected:
+                await pool.execute("UPDATE spans SET seq_label = $1 WHERE id = $2", expected, s["id"])
+
+
 def _next_seq_label(existing_spans, label_type: str) -> str:
     prefix = "E" if label_type == "Event" else "T"
     count = sum(1 for s in existing_spans if s["label_type"] == label_type)
@@ -274,6 +299,13 @@ async def delete_span(span_id: int):
     if not row:
         raise HTTPException(status_code=404, detail="Span not found")
     await pool.execute("DELETE FROM spans WHERE id=$1", span_id)
+    if row.get("batch_stem_id"):
+        await _resequence_spans(pool, batch_stem_id=row["batch_stem_id"])
+        await pool.execute("DELETE FROM matrix_snapshots WHERE batch_stem_id = $1", row["batch_stem_id"])
+    elif row.get("session_id"):
+        await _resequence_spans(pool, session_id=row["session_id"])
+        await pool.execute("DELETE FROM matrix_snapshots WHERE session_id = $1", row["session_id"])
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -690,6 +722,8 @@ async def list_stems(
                u1.username AS booked_username,
                act.expires_at AS locked_until,
                act.status AS booked_status,
+               dn.completed_batch_stem_id,
+               dn.completed_batch_id,
                dn.completed_by,
                u2.username AS completed_username,
                dn.completed_at,
@@ -712,7 +746,7 @@ async def list_stems(
             ORDER BY b.expires_at DESC LIMIT 1
         ) act ON true
         LEFT JOIN LATERAL (
-            SELECT bs.completed_by, bs.completed_at
+            SELECT bs.id AS completed_batch_stem_id, bs.batch_id AS completed_batch_id, bs.completed_by, bs.completed_at
             FROM batch_stems bs
             WHERE bs.stem_id = s.id AND bs.status = 'done'
             ORDER BY bs.completed_at DESC LIMIT 1
@@ -790,6 +824,8 @@ async def list_stems(
             locked_until=locked_until,
             completed_by=completed_by,
             completed_at=completed_at,
+            completed_batch_stem_id=r["completed_batch_stem_id"] if completed_by else None,
+            completed_batch_id=r["completed_batch_id"] if completed_by else None,
             is_blacklisted=bool(r["is_blacklisted"]),
             blacklist_reason=r["blacklist_reason"],
             blacklisted_by=blacklisted_by,
@@ -798,6 +834,109 @@ async def list_stems(
         ))
 
     return StemsListResponse(items=items, total=total, page=page, page_size=page_size)
+
+
+@app.get("/completed-stems", response_model=CompletedStemsResponse)
+async def list_completed_stems(
+    request: Request,
+    search: Optional[str] = Query(None),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    user=Depends(get_current_user),
+):
+    pool = await get_pool()
+    offset = (page - 1) * page_size
+    params = []
+    where_clauses = ["bs.status = 'done'"]
+
+    if search and search.strip():
+        s = f"%{search.strip()}%"
+        params.append(s)
+        idx = len(params)
+        where_clauses.append(f"(s.text ILIKE ${idx} OR u_ann.username ILIKE ${idx} OR u_rev.username ILIKE ${idx} OR b.name ILIKE ${idx})")
+
+    where_sql = " AND ".join(where_clauses)
+
+    count_sql = f"""
+        SELECT COUNT(*) FROM batch_stems bs
+        JOIN stems s ON s.id = bs.stem_id
+        JOIN batches b ON b.id = bs.batch_id
+        LEFT JOIN users u_ann ON u_ann.id = bs.completed_by
+        LEFT JOIN users u_rev ON u_rev.id = bs.reviewer_id
+        WHERE {where_sql}
+    """
+    total = await pool.fetchval(count_sql, *params)
+
+    limit_idx = len(params) + 1
+    offset_idx = len(params) + 2
+
+    data_sql = f"""
+        SELECT 
+            bs.id AS batch_stem_id,
+            bs.batch_id,
+            b.name AS batch_name,
+            bs.stem_id,
+            s.text AS stem_text,
+            s.word_count,
+            bs.status,
+            bs.completed_at,
+            u_ann.id AS completed_by_id,
+            u_ann.username AS completed_by_username,
+            u_rev.id AS reviewer_id,
+            u_rev.username AS reviewer_username,
+            bs.reviewed_at,
+            (SELECT COUNT(*) FROM spans WHERE batch_stem_id = bs.id AND label_type = 'Event') AS event_count,
+            (SELECT COUNT(*) FROM spans WHERE batch_stem_id = bs.id AND label_type = 'Time') AS time_count,
+            (SELECT json_build_object('decision', sr.decision, 'comment', sr.comment, 'reviewer_username', ur2.username, 'created_at', sr.created_at)
+             FROM stem_reviews sr
+             JOIN users ur2 ON ur2.id = sr.reviewer_id
+             WHERE sr.batch_stem_id = bs.id
+             ORDER BY sr.created_at DESC LIMIT 1) AS latest_review
+        FROM batch_stems bs
+        JOIN stems s ON s.id = bs.stem_id
+        JOIN batches b ON b.id = bs.batch_id
+        LEFT JOIN users u_ann ON u_ann.id = bs.completed_by
+        LEFT JOIN users u_rev ON u_rev.id = bs.reviewer_id
+        WHERE {where_sql}
+        ORDER BY bs.completed_at DESC NULLS LAST, bs.id DESC
+        LIMIT ${limit_idx} OFFSET ${offset_idx}
+    """
+    rows = await pool.fetch(data_sql, *params, page_size, offset)
+
+    items = []
+    for r in rows:
+        completed_by = None
+        if r["completed_by_id"] is not None:
+            completed_by = {"id": r["completed_by_id"], "username": r["completed_by_username"]}
+        reviewer = None
+        if r["reviewer_id"] is not None:
+            reviewer = {"id": r["reviewer_id"], "username": r["reviewer_username"]}
+
+        latest_rev = r["latest_review"]
+        if isinstance(latest_rev, str):
+            try:
+                latest_rev = json.loads(latest_rev)
+            except Exception:
+                pass
+
+        items.append(CompletedStemItem(
+            batch_stem_id=r["batch_stem_id"],
+            batch_id=r["batch_id"],
+            batch_name=r["batch_name"],
+            stem_id=r["stem_id"],
+            stem_text=r["stem_text"],
+            word_count=r["word_count"],
+            status=r["status"],
+            completed_by=completed_by,
+            completed_at=r["completed_at"],
+            reviewer=reviewer,
+            reviewed_at=r["reviewed_at"],
+            event_count=r["event_count"] or 0,
+            time_count=r["time_count"] or 0,
+            latest_review=latest_rev,
+        ))
+
+    return CompletedStemsResponse(items=items, total=total or 0, page=page, page_size=page_size)
 
 
 @app.post("/stems/import")
@@ -1027,7 +1166,15 @@ async def list_batches(request: Request):
 async def get_batch(batch_id: int, request: Request):
     user = await get_current_user(request)
     pool = await get_pool()
-    batch = await pool.fetchrow("SELECT * FROM batches WHERE id = $1", batch_id)
+    batch = await pool.fetchrow(
+        """
+        SELECT b.*, u.username AS owner_username
+        FROM batches b
+        JOIN users u ON u.id = b.owner_id
+        WHERE b.id = $1
+        """,
+        batch_id
+    )
     if not batch:
         raise HTTPException(status_code=404, detail="Batch not found")
     if batch["owner_id"] != user["id"] and user.get("role") not in ("reviewer", "admin"):
@@ -1079,7 +1226,7 @@ async def get_batch(batch_id: int, request: Request):
         id=batch["id"],
         name=batch["name"],
         owner_id=batch["owner_id"],
-        owner_username=user["username"],
+        owner_username=batch["owner_username"],
         created_at=batch["created_at"],
         locked_at=batch["locked_at"],
         expires_at=batch["expires_at"],
@@ -1173,7 +1320,7 @@ async def get_batch_stem(batch_stem_id: int, request: Request):
     )
     if not bs:
         raise HTTPException(status_code=404, detail="Batch stem not found")
-    if bs["owner_id"] != user["id"] and not is_reviewer_or_admin:
+    if bs["owner_id"] != user["id"] and not is_reviewer_or_admin and bs["status"] != "done":
         raise HTTPException(status_code=403, detail="Not your batch stem")
     if not is_reviewer_or_admin and bs["status"] not in ("pending-review", "done", "blacklisted"):
         if _ensure_aware(bs["expires_at"]) <= _now():
@@ -1229,14 +1376,14 @@ async def _get_batch_stem_for_edit(pool, batch_stem_id: int, user: dict, action_
     )
     if not bs:
         raise HTTPException(status_code=404, detail="Batch stem not found")
-    if not is_reviewer_or_admin:
-        if bs["owner_id"] != user["id"]:
-            raise HTTPException(status_code=404, detail="Batch stem not found")
+    if bs["owner_id"] == user["id"]:
         if bs["status"] in ("pending-review", "done", "blacklisted"):
             raise HTTPException(status_code=400, detail=f"Cannot {action_name} while stem status is '{bs['status']}'")
-        if _ensure_aware(bs["expires_at"]) <= _now():
+        if bs["status"] != "re-evaluate" and _ensure_aware(bs["expires_at"]) <= _now():
             raise HTTPException(status_code=423, detail="Lock expired")
     else:
+        if not is_reviewer_or_admin:
+            raise HTTPException(status_code=404, detail="Batch stem not found")
         if bs["status"] == "blacklisted":
             raise HTTPException(status_code=400, detail=f"Cannot {action_name} a blacklisted stem")
     return bs, is_reviewer_or_admin
@@ -1247,12 +1394,13 @@ async def create_batch_span(batch_stem_id: int, body: BatchSpanCreate, request: 
     validate_csrf(request)
     pool = await get_pool()
     bs, is_reviewer_or_admin = await _get_batch_stem_for_edit(pool, batch_stem_id, user, "add spans")
+    await _resequence_spans(pool, batch_stem_id=batch_stem_id)
     existing = await pool.fetch(
-        "SELECT * FROM spans WHERE batch_stem_id = $1 ORDER BY created_at", batch_stem_id
+        "SELECT * FROM spans WHERE batch_stem_id = $1 AND label_type = $2 ORDER BY created_at, id",
+        batch_stem_id, body.label_type
     )
     prefix = "E" if body.label_type == "Event" else "T"
-    count = sum(1 for s in existing if s["label_type"] == body.label_type)
-    seq_label = f"{prefix}{count + 1}"
+    seq_label = f"{prefix}{len(existing) + 1}"
     row = await pool.fetchrow(
         """INSERT INTO spans (batch_stem_id, label_type, seq_label, span_text, char_start, char_end, tl_start, tl_end, source)
            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *""",
@@ -1260,7 +1408,7 @@ async def create_batch_span(batch_stem_id: int, body: BatchSpanCreate, request: 
         body.span_text, body.char_start, body.char_end,
         body.tl_start, body.tl_end, body.source
     )
-    if not is_reviewer_or_admin and bs["status"] in ("not_started", "re-evaluate"):
+    if bs["owner_id"] == user["id"] and bs["status"] in ("not_started", "re-evaluate"):
         await pool.execute(
             "UPDATE batch_stems SET status = 'in_progress', updated_at = now() WHERE id = $1", batch_stem_id
         )
@@ -1280,19 +1428,13 @@ async def list_batch_spans(batch_stem_id: int, request: Request):
         "SELECT bs.*, b.owner_id FROM batch_stems bs JOIN batches b ON b.id = bs.batch_id WHERE bs.id = $1",
         batch_stem_id
     )
-    if not bs or (bs["owner_id"] != user["id"] and not is_reviewer_or_admin):
+    if not bs or (bs["owner_id"] != user["id"] and not is_reviewer_or_admin and bs["status"] != "done"):
         raise HTTPException(status_code=404, detail="Batch stem not found")
+    await _resequence_spans(pool, batch_stem_id=batch_stem_id)
     spans = await pool.fetch(
-        "SELECT * FROM spans WHERE batch_stem_id = $1 ORDER BY created_at", batch_stem_id
+        "SELECT * FROM spans WHERE batch_stem_id = $1 ORDER BY created_at, id", batch_stem_id
     )
-    label_counts = {}
-    result = []
-    for s in spans:
-        lt = s["label_type"]
-        label_counts[lt] = label_counts.get(lt, 0) + 1
-        seq = f"{'E' if lt == 'Event' else 'T'}{label_counts[lt]}"
-        result.append(_batch_span_to_out(dict(s), seq, batch_stem_id))
-    return result
+    return [_batch_span_to_out(dict(s), s["seq_label"], batch_stem_id) for s in spans]
 
 
 @app.patch("/batch-stems/{batch_stem_id}/spans/{span_id}")
@@ -1310,7 +1452,7 @@ async def update_batch_span(batch_stem_id: int, span_id: int, body: SpanUpdate, 
         tl_start, tl_end, span_id
     )
     await pool.execute("UPDATE batch_stems SET updated_at = now() WHERE id = $1", batch_stem_id)
-    return _batch_span_to_out(dict(updated), span["seq_label"], batch_stem_id)
+    return _batch_span_to_out(dict(updated), updated["seq_label"], batch_stem_id)
 
 
 @app.delete("/batch-stems/{batch_stem_id}/spans/{span_id}", status_code=204)
@@ -1322,6 +1464,8 @@ async def delete_batch_span(batch_stem_id: int, span_id: int, request: Request, 
     if not span:
         raise HTTPException(status_code=404, detail="Span not found")
     await pool.execute("DELETE FROM spans WHERE id = $1", span_id)
+    await _resequence_spans(pool, batch_stem_id=batch_stem_id)
+    await pool.execute("DELETE FROM matrix_snapshots WHERE batch_stem_id = $1", batch_stem_id)
     await pool.execute("UPDATE batch_stems SET updated_at = now() WHERE id = $1", batch_stem_id)
     return None
 
@@ -1332,7 +1476,7 @@ async def save_batch_matrix(batch_stem_id: int, request: Request, user=Depends(g
     pool = await get_pool()
     bs, is_reviewer_or_admin = await _get_batch_stem_for_edit(pool, batch_stem_id, user, "modify matrix")
     spans = await pool.fetch(
-        "SELECT * FROM spans WHERE batch_stem_id = $1 AND label_type = 'Event' ORDER BY created_at",
+        "SELECT * FROM spans WHERE batch_stem_id = $1 AND label_type = 'Event' ORDER BY created_at, id",
         batch_stem_id
     )
     span_list = [dict(s) for s in spans]
@@ -1380,10 +1524,10 @@ async def get_batch_matrix(batch_stem_id: int, request: Request):
         "SELECT bs.*, b.owner_id FROM batch_stems bs JOIN batches b ON b.id = bs.batch_id WHERE bs.id = $1",
         batch_stem_id
     )
-    if not bs or (bs["owner_id"] != user["id"] and not is_reviewer_or_admin):
+    if not bs or (bs["owner_id"] != user["id"] and not is_reviewer_or_admin and bs["status"] != "done"):
         raise HTTPException(status_code=404, detail="Batch stem not found")
     spans = await pool.fetch(
-        "SELECT * FROM spans WHERE batch_stem_id = $1 AND label_type = 'Event' ORDER BY created_at",
+        "SELECT * FROM spans WHERE batch_stem_id = $1 AND label_type = 'Event' ORDER BY created_at, id",
         batch_stem_id
     )
     span_list = [dict(s) for s in spans]
@@ -1628,6 +1772,12 @@ async def review_batch_stem(
     if not bs:
         raise HTTPException(status_code=404, detail="Batch stem not found")
 
+    if bs["owner_id"] == reviewer["id"] and reviewer.get("role") != "admin":
+        raise HTTPException(
+            status_code=400,
+            detail="Reviewers cannot review their own annotations. Another reviewer or admin must evaluate this submission."
+        )
+
     decision = body.decision.lower()
     if decision not in ("accept", "re-evaluate", "blacklist", "release_to_pool"):
         raise HTTPException(status_code=400, detail="Decision must be 'accept', 're-evaluate', 'blacklist', or 'release_to_pool'")
@@ -1865,7 +2015,7 @@ async def export_batch_stem_json(batch_stem_id: int, request: Request):
         raise HTTPException(status_code=404, detail="Batch stem not found")
     is_reviewer_or_admin = user.get("role") in ("reviewer", "admin")
     batch = await pool.fetchrow("SELECT * FROM batches WHERE id=$1", bs["batch_id"])
-    if not batch or (batch["owner_id"] != user["id"] and not is_reviewer_or_admin):
+    if not batch or (batch["owner_id"] != user["id"] and not is_reviewer_or_admin and bs["status"] != "done"):
         raise HTTPException(status_code=404, detail="Batch not found")
     stem_row = await pool.fetchrow("SELECT text FROM stems WHERE id=$1", bs["stem_id"])
     stem_text = stem_row["text"] if stem_row else ""
@@ -2221,10 +2371,11 @@ async def llm_label_and_timeline(body: LLMLabelAndTimelineRequest, request: Requ
                         "source": "llm",
                     })
 
+            await _resequence_spans(conn, batch_stem_id=batch_stem_id)
             existing = await conn.fetch(
-                "SELECT * FROM spans WHERE batch_stem_id = $1 ORDER BY created_at", batch_stem_id
+                "SELECT * FROM spans WHERE batch_stem_id = $1 AND label_type = 'Event' ORDER BY created_at, id", batch_stem_id
             )
-            event_count = sum(1 for s in existing if s["label_type"] == "Event")
+            event_count = len(existing)
             span_insert_data = []
             for event in accepted_events:
                 event_count += 1
@@ -2341,7 +2492,7 @@ async def llm_label_and_timeline(body: LLMLabelAndTimelineRequest, request: Requ
                     to_update_positions
                 )
 
-            if not is_reviewer_or_admin and bs["status"] in ("not_started", "re-evaluate"):
+            if bs["owner_id"] == user["id"] and bs["status"] in ("not_started", "re-evaluate"):
                 await conn.execute(
                     "UPDATE batch_stems SET status = 'in_progress', updated_at = now() WHERE id = $1", batch_stem_id
                 )

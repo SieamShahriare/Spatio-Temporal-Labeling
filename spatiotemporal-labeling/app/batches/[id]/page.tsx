@@ -264,7 +264,7 @@ export default function BatchDetailPage() {
       }}>
         <div style={{ padding: '12px 16px', background: 'var(--surface-alt)', borderBottom: '1px solid var(--border)', fontWeight: 600, fontSize: 13, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <span>STEMS ({batch.progress.done}/{batch.progress.total} done)</span>
-          {(user?.role === 'reviewer' || user?.role === 'admin') && (
+          {(user?.role === 'reviewer' || user?.role === 'admin') && batch.owner_id !== user?.id && (
             <span style={{ fontSize: 11, color: '#8b5cf6', background: 'rgba(139, 92, 246, 0.1)', padding: '2px 8px', borderRadius: 12, fontWeight: 600 }}>
               Reviewer Mode Active
             </span>
@@ -281,7 +281,8 @@ export default function BatchDetailPage() {
           </thead>
           <tbody>
             {batch.stems.map(bs => {
-              const isReviewer = user?.role === 'reviewer' || user?.role === 'admin';
+              const isOwner = batch.owner_id === user?.id;
+              const isReviewer = (user?.role === 'reviewer' || user?.role === 'admin') && !isOwner;
               let badgeBg = 'var(--surface-alt)';
               let badgeColor = 'var(--text-muted)';
               let statusLabel = bs.status.replace('_', ' ');
@@ -361,12 +362,12 @@ export default function BatchDetailPage() {
                   <td style={td}>
                     <button
                       onClick={() => {
-                        const canView = isReviewer || bs.status === 'done' || bs.status === 'pending-review' || bs.status === 'blacklisted';
+                        const canView = isOwner || isReviewer || bs.status === 'done' || bs.status === 'pending-review' || bs.status === 'blacklisted';
                         if (isExpired && !canView) {
                           alert('This batch has expired. Only submitted, completed, or blacklisted stems can be viewed.');
                           return;
                         }
-                        if (bs.status === 'done' && !isReviewer) {
+                        if (bs.status === 'done' && isOwner) {
                           router.push(`/completed/${bs.id}`);
                           return;
                         }

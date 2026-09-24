@@ -347,7 +347,9 @@ export default function AnnotateBatchStemPage() {
     }
   }, [stemEditText, stem, spans.length, stemId]);
 
-  const isReviewMode = searchParams?.get('mode') === 'review' || user?.role === 'reviewer';
+  const isOwner = Boolean(user && stem && stem.owner_id === user.id);
+  const isReviewerOrAdmin = user?.role === 'reviewer' || user?.role === 'admin';
+  const isReviewMode = isReviewerOrAdmin && !isOwner && searchParams?.get('mode') === 'review';
   const isReadOnly = !isReviewMode && (stem?.status === 'pending-review' || stem?.status === 'done' || stem?.status === 'blacklisted');
 
   if (!isBrowser || authLoading) {

@@ -218,21 +218,39 @@ export default function ReviewQueuePage() {
                     </span>
                   </td>
                   <td style={{ ...td, textAlign: 'right' }}>
-                    <button
-                      onClick={() => router.push(`/annotate/${item.batch_id}/${item.batch_stem_id}?mode=review`)}
-                      style={{
-                        padding: '6px 14px',
-                        background: '#2563eb',
-                        color: '#fff',
-                        border: 'none',
-                        borderRadius: 6,
-                        cursor: 'pointer',
-                        fontWeight: 600,
-                        fontSize: 12,
-                      }}
-                    >
-                      Review →
-                    </button>
+                    {item.annotator_id === user?.id && user?.role !== 'admin' ? (
+                      <span
+                        title="You cannot review your own annotations. Another reviewer or admin must evaluate this submission."
+                        style={{
+                          fontSize: 12,
+                          color: 'var(--text-muted)',
+                          fontStyle: 'italic',
+                          background: 'var(--surface-alt)',
+                          padding: '4px 10px',
+                          borderRadius: 6,
+                          border: '1px solid var(--border)',
+                          display: 'inline-block',
+                        }}
+                      >
+                        Your Submission (Awaiting Peer Review)
+                      </span>
+                    ) : (
+                      <button
+                        onClick={() => router.push(`/annotate/${item.batch_id}/${item.batch_stem_id}?mode=review`)}
+                        style={{
+                          padding: '6px 14px',
+                          background: '#2563eb',
+                          color: '#fff',
+                          border: 'none',
+                          borderRadius: 6,
+                          cursor: 'pointer',
+                          fontWeight: 600,
+                          fontSize: 12,
+                        }}
+                      >
+                        Review →
+                      </button>
+                    )}
                   </td>
                 </tr>
               ))
