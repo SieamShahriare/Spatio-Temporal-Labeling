@@ -66,7 +66,7 @@ export interface Violation {
 }
 
 export const ALLEN_RELATIONS: Record<number, { name: string; symbol: string }> = {
-  0:  { name: 'self',          symbol: '—'  },
+  0:  { name: 'equal',         symbol: '='  },
   1:  { name: 'precedes',      symbol: '<'  },
   2:  { name: 'meets',         symbol: 'm'  },
   3:  { name: 'overlaps',      symbol: 'o'  },
@@ -82,7 +82,7 @@ export const ALLEN_RELATIONS: Record<number, { name: string; symbol: string }> =
   [-6]: { name: 'finished-by',   symbol: 'fi' },
 };
 
-export const ALLEN_CODES = [1, 2, 3, 4, 5, 6, 7, -1, -2, -3, -4, -5, -6];
+export const ALLEN_CODES = [0, 1, 2, 3, 4, 5, 6, -1, -2, -3, -4, -5, -6];
 
 // ====== Auth types ======
 

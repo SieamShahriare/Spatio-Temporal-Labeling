@@ -318,7 +318,21 @@ async def get_matrix(session_id: int):
     await _get_session_or_404(pool, session_id)
     spans = await _get_event_spans(pool, session_id)
     span_list = [dict(s) for s in spans]
-    matrix = build_matrix(span_list)
+    snapshot = await pool.fetchrow(
+        "SELECT * FROM matrix_snapshots WHERE session_id=$1 ORDER BY updated_at DESC LIMIT 1",
+        session_id
+    )
+    if snapshot and snapshot["matrix_json"]:
+        try:
+            saved_matrix = json.loads(snapshot["matrix_json"])
+            if len(saved_matrix) == len(span_list):
+                matrix = saved_matrix
+            else:
+                matrix = build_matrix(span_list)
+        except Exception:
+            matrix = build_matrix(span_list)
+    else:
+        matrix = build_matrix(span_list)
     span_order = [{"id": s["id"], "seq_label": s["seq_label"]} for s in span_list]
     violations = transitivity_check(matrix, [s["seq_label"] for s in span_list])
     return {"matrix": matrix, "span_order": span_order, "violations": violations}
@@ -1531,7 +1545,21 @@ async def get_batch_matrix(batch_stem_id: int, request: Request):
         batch_stem_id
     )
     span_list = [dict(s) for s in spans]
-    matrix = build_matrix(span_list)
+    snapshot = await pool.fetchrow(
+        "SELECT * FROM matrix_snapshots WHERE batch_stem_id=$1 ORDER BY updated_at DESC LIMIT 1",
+        batch_stem_id
+    )
+    if snapshot and snapshot["matrix_json"]:
+        try:
+            saved_matrix = json.loads(snapshot["matrix_json"])
+            if len(saved_matrix) == len(span_list):
+                matrix = saved_matrix
+            else:
+                matrix = build_matrix(span_list)
+        except Exception:
+            matrix = build_matrix(span_list)
+    else:
+        matrix = build_matrix(span_list)
     span_order = [{"id": s["id"], "seq_label": s["seq_label"]} for s in span_list]
     violations = transitivity_check(matrix, [s["seq_label"] for s in span_list])
     return {"matrix": matrix, "span_order": span_order, "violations": violations}

@@ -109,21 +109,21 @@ The 13 Allen relations are encoded as signed integers. The ordering follows the 
 
 | Code | Relation Name   | Symbol | Inverse Code | Inverse Name     |
 |------|-----------------|--------|--------------|------------------|
+| 0    | equal           | =      | 0            | equal (symmetric)|
 | +1   | precedes        | <      | -1           | preceded-by (>)  |
 | +2   | meets           | m      | -2           | met-by (mi)      |
 | +3   | overlaps        | o      | -3           | overlapped-by (oi)|
 | +4   | starts          | s      | -4           | started-by (si)  |
 | +5   | during          | d      | -5           | contains (di)    |
 | +6   | finishes        | f      | -6           | finished-by (fi) |
-| +7   | equals          | =      | +7           | equals (symmetric)|
 
 ### Matrix Rules
 
-- **Diagonal** (span i vs itself): `0`
-- **Upper triangle** (i < j): positive integer from the table above
-- **Lower triangle** (i > j): negative of the upper triangle value, EXCEPT for `equals` (+7) which stays +7
+- **Diagonal** (span i vs itself) and **equal/same timeline**: `0`
+- **Upper triangle** (i < j): code from the table above
+- **Lower triangle** (i > j): inverse code from the table above (0 is its own inverse)
 - If `matrix[i][j] = +3`, then `matrix[j][i] = -3`
-- If `matrix[i][j] = +7`, then `matrix[j][i] = +7`
+- If `matrix[i][j] = 0`, then `matrix[j][i] = 0`
 
 ### Python Encoding Module
 

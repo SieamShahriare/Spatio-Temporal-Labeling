@@ -4,6 +4,7 @@ Encodes the 13 Allen relations as signed integers.
 """
 
 RELATIONS = {
+    'equal':           0,
     'precedes':       +1,
     'meets':          +2,
     'overlaps':       +3,
@@ -22,6 +23,7 @@ RELATIONS = {
 RELATION_NAMES = {v: k for k, v in RELATIONS.items()}
 
 INVERSES = {
+    0: 0,
     +1: -1,  -1: +1,
     +2: -2,  -2: +2,
     +3: -3,  -3: +3,
@@ -32,6 +34,7 @@ INVERSES = {
 }
 
 RELATION_SYMBOLS = {
+     0: '=',
     +1: '<',
     +2: 'm',
     +3: 'o',
@@ -45,7 +48,6 @@ RELATION_SYMBOLS = {
     -4: 'si',
     -5: 'di',
     -6: 'fi',
-     0: '—',
 }
 
 
@@ -56,7 +58,7 @@ def compute_relation(a_start: float, a_end: float, b_start: float, b_end: float,
     """
     def eq(x, y): return abs(x - y) <= tol
 
-    if eq(a_start, b_start) and eq(a_end, b_end): return +7   # equals
+    if eq(a_start, b_start) and eq(a_end, b_end): return 0   # equal / same timeline
     if eq(a_end, b_start):                          return +2   # meets
     if eq(b_end, a_start):                          return -2   # met-by
     if a_end < b_start - tol:                       return +1   # precedes

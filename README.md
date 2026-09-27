@@ -78,13 +78,13 @@ Secrets live only in the Render/Vercel dashboards. Never commit `.env` files (th
 
 | Code | Relation    | Symbol | Inverse |
 |------|-------------|--------|---------|
+| 0    | equal       | =      | 0       |
 | +1   | precedes    | <      | -1      |
 | +2   | meets       | m      | -2      |
 | +3   | overlaps    | o      | -3      |
 | +4   | starts      | s      | -4      |
 | +5   | during      | d      | -5      |
 | +6   | finishes    | f      | -6      |
-| +7   | equals      | =      | +7      |
 
 ---
 

@@ -17,7 +17,7 @@ const cellBg = (code: number): string => {
 };
 
 const cellColor = (code: number): string => {
-  if (code === 0) return 'var(--text-disabled)';
+  if (code === 0) return 'var(--text-primary)';
   if (code > 0) return 'var(--info)';
   return 'var(--negative)';
 };
@@ -199,6 +199,11 @@ export default function AllenMatrix({ matrixData, onOverride, onSave, readOnly =
                             width: '100%',
                           }}
                         >
+                          {!ALLEN_CODES.includes(code) && (
+                            <option value={code}>
+                              {code > 0 ? '+' : ''}{code} ({rel?.symbol ?? code})
+                            </option>
+                          )}
                           {ALLEN_CODES.map(c => {
                             const r = ALLEN_RELATIONS[c];
                             return (
@@ -239,7 +244,7 @@ export default function AllenMatrix({ matrixData, onOverride, onSave, readOnly =
           const r = ALLEN_RELATIONS[c];
           return (
             <span key={c} style={{ marginRight: 8 }}>
-              <strong style={{ color: c > 0 ? 'var(--info)' : 'var(--negative)' }}>
+              <strong style={{ color: c > 0 ? 'var(--info)' : c < 0 ? 'var(--negative)' : 'var(--text-primary)' }}>
                 {c > 0 ? '+' : ''}{c}
               </strong>
               {' '}={' '}
