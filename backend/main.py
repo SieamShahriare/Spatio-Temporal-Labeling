@@ -22,7 +22,7 @@ from models import (
     ExtractTimelineRequest, ExtractTimelineResponse,
     LLMLabelAndTimelineRequest, LLMLabelAndTimelineResponse,
     SignupRequest, LoginRequest, UserOut, UserRoleUpdate, AuthMeResponse,
-    StemOut, StemsListResponse, StemsImportResponse,
+    StemOut, StemsListResponse, StemStatsResponse, UserStemStatItem, UserStemStatsResponse, StemsImportResponse,
     CompletedStemItem, CompletedStemsResponse,
     BatchCreate, BatchOut, BatchDetailOut,
     BatchSpanCreate, BatchSpanOut,
@@ -633,6 +633,104 @@ async def _require_batch_lock(batch_id: int, user: dict) -> dict:
 # ---------------------------------------------------------------------------
 # STEMS
 # ---------------------------------------------------------------------------
+
+@app.get("/stems/stats", response_model=StemStatsResponse)
+async def get_stem_stats(request: Request):
+    pool = await get_pool()
+    total = await pool.fetchval("SELECT COUNT(*) FROM stems")
+    completed = await pool.fetchval(
+        "SELECT COUNT(DISTINCT stem_id) FROM batch_stems WHERE status = 'done'"
+    )
+    under_review = await pool.fetchval(
+        """SELECT COUNT(DISTINCT stem_id) FROM batch_stems 
+           WHERE status = 'pending-review' 
+             AND stem_id NOT IN (SELECT stem_id FROM batch_stems WHERE status = 'done')"""
+    )
+    total_val = total or 0
+    completed_val = completed or 0
+    under_review_val = under_review or 0
+    remaining_val = max(0, total_val - completed_val - under_review_val)
+    return {
+        "total_stems": total_val,
+        "completed_stems": completed_val,
+        "under_review_stems": under_review_val,
+        "remaining_stems": remaining_val,
+    }
+
+
+@app.get("/stems/user-stats", response_model=UserStemStatsResponse)
+async def get_user_stem_stats(request: Request, user=Depends(get_current_user)):
+    pool = await get_pool()
+    query = """
+    SELECT 
+        u.id AS user_id,
+        u.username,
+        u.email,
+        u.role,
+        COALESCE(done_stats.cnt, 0)::int AS done,
+        COALESCE(review_stats.cnt, 0)::int AS under_review,
+        COALESCE(lock_stats.cnt, 0)::int AS in_lock
+    FROM users u
+    LEFT JOIN (
+        SELECT COALESCE(bs.completed_by, b.owner_id) AS uid, COUNT(DISTINCT bs.stem_id) AS cnt
+        FROM batch_stems bs
+        JOIN batches b ON b.id = bs.batch_id
+        WHERE bs.status = 'done'
+        GROUP BY COALESCE(bs.completed_by, b.owner_id)
+    ) done_stats ON done_stats.uid = u.id
+    LEFT JOIN (
+        SELECT b.owner_id AS uid, COUNT(DISTINCT bs.stem_id) AS cnt
+        FROM batch_stems bs
+        JOIN batches b ON b.id = bs.batch_id
+        WHERE bs.status = 'pending-review'
+        GROUP BY b.owner_id
+    ) review_stats ON review_stats.uid = u.id
+    LEFT JOIN (
+        SELECT b.owner_id AS uid, COUNT(DISTINCT bs.stem_id) AS cnt
+        FROM batch_stems bs
+        JOIN batches b ON b.id = bs.batch_id
+        WHERE b.status = 'active' 
+          AND b.expires_at > now()
+          AND bs.status NOT IN ('done', 'pending-review', 'released', 'blacklisted')
+        GROUP BY b.owner_id
+    ) lock_stats ON lock_stats.uid = u.id
+    ORDER BY (COALESCE(done_stats.cnt, 0) + COALESCE(review_stats.cnt, 0) + COALESCE(lock_stats.cnt, 0)) DESC, u.username ASC
+    """
+    rows = await pool.fetch(query)
+    users_list = []
+    my_item = None
+    for r in rows:
+        done_cnt = r["done"]
+        under_review_cnt = r["under_review"]
+        in_lock_cnt = r["in_lock"]
+        item = UserStemStatItem(
+            user_id=r["user_id"],
+            username=r["username"],
+            email=r["email"],
+            role=r["role"],
+            done=done_cnt,
+            under_review=under_review_cnt,
+            in_lock=in_lock_cnt,
+            total=done_cnt + under_review_cnt + in_lock_cnt,
+        )
+        users_list.append(item)
+        if r["user_id"] == user["id"]:
+            my_item = item
+
+    if not my_item:
+        my_item = UserStemStatItem(
+            user_id=user["id"],
+            username=user.get("username", ""),
+            email=user.get("email", ""),
+            role=user.get("role", "annotator"),
+            done=0,
+            under_review=0,
+            in_lock=0,
+            total=0,
+        )
+
+    return UserStemStatsResponse(my_stats=my_item, users=users_list)
+
 
 @app.get("/stems")
 async def list_stems(

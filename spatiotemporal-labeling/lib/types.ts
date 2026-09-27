@@ -137,6 +137,29 @@ export interface StemsListResponse {
   page_size: number;
 }
 
+export interface StemStats {
+  total_stems: number;
+  completed_stems: number;
+  under_review_stems: number;
+  remaining_stems: number;
+}
+
+export interface UserStemStatItem {
+  user_id: number;
+  username: string;
+  email: string;
+  role: string;
+  done: number;
+  under_review: number;
+  in_lock: number;
+  total: number;
+}
+
+export interface UserStemStatsResponse {
+  my_stats: UserStemStatItem;
+  users: UserStemStatItem[];
+}
+
 export interface CompletedStemItem {
   batch_stem_id: number;
   batch_id: number;

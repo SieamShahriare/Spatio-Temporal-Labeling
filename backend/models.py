@@ -161,6 +161,29 @@ class StemsListResponse(BaseModel):
     page_size: int
 
 
+class StemStatsResponse(BaseModel):
+    total_stems: int
+    completed_stems: int
+    under_review_stems: int
+    remaining_stems: int
+
+
+class UserStemStatItem(BaseModel):
+    user_id: int
+    username: str
+    email: str
+    role: str
+    done: int
+    under_review: int
+    in_lock: int
+    total: int
+
+
+class UserStemStatsResponse(BaseModel):
+    my_stats: UserStemStatItem
+    users: List[UserStemStatItem]
+
+
 class CompletedStemItem(BaseModel):
     batch_stem_id: int
     batch_id: int

@@ -2,8 +2,8 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { listBatches, getBatch, releaseBatch, rebookBatch, exportBatchCsv, exportBatchJson, exportBatchStemJson } from '@/lib/api';
-import { BatchOut, BatchDetailOut } from '@/lib/types';
+import { listBatches, getBatch, releaseBatch, rebookBatch, exportBatchCsv, exportBatchJson, exportBatchStemJson, getStemStats, getUserStemStats } from '@/lib/api';
+import { BatchOut, BatchDetailOut, StemStats, UserStemStatsResponse, UserStemStatItem } from '@/lib/types';
 import { useAuth } from '@/lib/AuthContext';
 
 function formatCountdown(seconds: number): string {
@@ -44,6 +44,9 @@ export default function DashboardPage() {
   const [detail, setDetail] = useState<BatchDetailOut | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [rebooking, setRebooking] = useState(false);
+  const [stemStats, setStemStats] = useState<StemStats | null>(null);
+  const [userStemStats, setUserStemStats] = useState<UserStemStatsResponse | null>(null);
+  const [showAllUsers, setShowAllUsers] = useState(false);
 
   useEffect(() => {
     if (!authLoading && !user) {
@@ -56,8 +59,16 @@ export default function DashboardPage() {
     let cancelled = false;
     (async () => {
       try {
-        const data = await listBatches();
-        if (!cancelled) setBatches(data);
+        const [data, stats, uStats] = await Promise.all([
+          listBatches(),
+          getStemStats().catch(() => null),
+          getUserStemStats().catch(() => null),
+        ]);
+        if (!cancelled) {
+          setBatches(data);
+          if (stats) setStemStats(stats);
+          if (uStats) setUserStemStats(uStats);
+        }
       } catch (e: unknown) {
         if (!cancelled) setError(e instanceof Error ? e.message : 'Failed to load batches.');
       } finally {
@@ -238,6 +249,38 @@ export default function DashboardPage() {
           <div style={{ fontSize: 12, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 8 }}>Past / Released</div>
           <div style={{ fontSize: 28, fontWeight: 700 }}>{pastBatches.length}</div>
         </div>
+        <div
+          onClick={() => router.push('/stems')}
+          style={{
+            background: 'var(--surface)',
+            border: '1px solid var(--border)',
+            borderRadius: 10,
+            padding: 20,
+            cursor: 'pointer',
+          }}
+          title="Click to view available stems"
+        >
+          <div style={{ fontSize: 12, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 8 }}>Remaining Stems</div>
+          <div style={{ fontSize: 28, fontWeight: 700, color: '#2563eb' }}>
+            {stemStats ? stemStats.remaining_stems : '…'}
+          </div>
+          {stemStats && (
+            <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>
+              {stemStats.total_stems} total − {stemStats.completed_stems} done − {stemStats.under_review_stems} in review
+            </div>
+          )}
+        </div>
+        <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 10, padding: 20 }}>
+          <div style={{ fontSize: 12, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 8 }}>My Stems Handled</div>
+          <div style={{ fontSize: 28, fontWeight: 700, color: '#10b981' }}>
+            {userStemStats ? userStemStats.my_stats.total : '…'}
+          </div>
+          {userStemStats && (
+            <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>
+              {userStemStats.my_stats.done} done + {userStemStats.my_stats.under_review} in review + {userStemStats.my_stats.in_lock} in lock
+            </div>
+          )}
+        </div>
         {(user?.role === 'reviewer' || user?.role === 'admin') && (
           <div
             onClick={() => router.push('/reviews')}
@@ -255,6 +298,99 @@ export default function DashboardPage() {
           </div>
         )}
       </div>
+
+      {/* Per-User Stem Metrics Section */}
+      {userStemStats && userStemStats.users.length > 0 && (
+        <section style={{ marginBottom: 32 }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12, flexWrap: 'wrap', gap: 8 }}>
+            <div>
+              <h2 style={{ fontSize: 16, fontWeight: 600, margin: 0 }}>User Stem Metrics</h2>
+              <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: '2px 0 0' }}>
+                Stems done + under review + in-lock per user
+              </p>
+            </div>
+            <button
+              onClick={() => setShowAllUsers(prev => !prev)}
+              style={{
+                fontSize: 12,
+                padding: '4px 10px',
+                borderRadius: 6,
+                border: '1px solid var(--border)',
+                background: 'var(--surface)',
+                color: 'var(--text-secondary)',
+                cursor: 'pointer',
+                fontWeight: 500,
+              }}
+            >
+              {showAllUsers ? 'Show Active Only' : `Show All Users (${userStemStats.users.length})`}
+            </button>
+          </div>
+
+          <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 10, overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, textAlign: 'left', minWidth: 540 }}>
+              <thead>
+                <tr style={{ background: 'var(--surface-alt)', borderBottom: '1px solid var(--border)', color: 'var(--text-muted)', fontSize: 12 }}>
+                  <th style={{ padding: '10px 16px', fontWeight: 600 }}>User</th>
+                  <th style={{ padding: '10px 16px', fontWeight: 600 }}>Role</th>
+                  <th style={{ padding: '10px 16px', fontWeight: 600, textAlign: 'right' }}>Stems Done</th>
+                  <th style={{ padding: '10px 16px', fontWeight: 600, textAlign: 'right' }}>Under Review</th>
+                  <th style={{ padding: '10px 16px', fontWeight: 600, textAlign: 'right' }}>In-Lock</th>
+                  <th style={{ padding: '10px 16px', fontWeight: 600, textAlign: 'right' }}>Total</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(showAllUsers ? userStemStats.users : userStemStats.users.filter(u => u.total > 0 || u.user_id === user?.id)).map(u => {
+                  const isCurrent = u.user_id === user?.id;
+                  return (
+                    <tr
+                      key={u.user_id}
+                      style={{
+                        borderBottom: '1px solid var(--border)',
+                        background: isCurrent ? 'rgba(37, 99, 235, 0.04)' : 'transparent',
+                      }}
+                    >
+                      <td style={{ padding: '10px 16px', fontWeight: isCurrent ? 700 : 500 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                          <span>{u.username}</span>
+                          {isCurrent && (
+                            <span style={{ fontSize: 10, padding: '1px 6px', borderRadius: 10, background: '#2563eb', color: '#fff', fontWeight: 600 }}>
+                              You
+                            </span>
+                          )}
+                        </div>
+                      </td>
+                      <td style={{ padding: '10px 16px' }}>
+                        <span style={{
+                          fontSize: 11,
+                          padding: '2px 8px',
+                          borderRadius: 12,
+                          fontWeight: 600,
+                          background: u.role === 'reviewer' ? '#f3e8ff' : u.role === 'admin' ? '#fef3c7' : 'var(--surface-alt)',
+                          color: u.role === 'reviewer' ? '#7e22ce' : u.role === 'admin' ? '#b45309' : 'var(--text-secondary)',
+                        }}>
+                          {u.role}
+                        </span>
+                      </td>
+                      <td style={{ padding: '10px 16px', textAlign: 'right', fontWeight: u.done > 0 ? 600 : 400, color: u.done > 0 ? '#16a34a' : 'var(--text-disabled)' }}>
+                        {u.done}
+                      </td>
+                      <td style={{ padding: '10px 16px', textAlign: 'right', fontWeight: u.under_review > 0 ? 600 : 400, color: u.under_review > 0 ? '#8b5cf6' : 'var(--text-disabled)' }}>
+                        {u.under_review}
+                      </td>
+                      <td style={{ padding: '10px 16px', textAlign: 'right', fontWeight: u.in_lock > 0 ? 600 : 400, color: u.in_lock > 0 ? '#f59e0b' : 'var(--text-disabled)' }}>
+                        {u.in_lock}
+                      </td>
+                      <td style={{ padding: '10px 16px', textAlign: 'right', fontWeight: 700, color: u.total > 0 ? 'var(--text-primary)' : 'var(--text-disabled)' }}>
+                        {u.total}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
 
       {loading ? (
         <p style={{ color: 'var(--text-muted)' }}>Loading…</p>

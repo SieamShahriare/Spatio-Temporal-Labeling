@@ -1,6 +1,6 @@
 // API helper — all calls go to NEXT_PUBLIC_API_URL (FastAPI backend)
 
-import type { LLMLabelAndTimelineResponse, ReviewDecisionRequest, CompletedStemsResponse } from '@/lib/types';
+import type { LLMLabelAndTimelineResponse, ReviewDecisionRequest, CompletedStemsResponse, StemStats, UserStemStatsResponse } from '@/lib/types';
 
 const BASE = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000';
 
@@ -91,6 +91,14 @@ export const listStems = (filter: StemFilter = {}) => {
   if (filter.page) params.set('page', String(filter.page));
   const qs = params.toString();
   return apiFetch(`/stems${qs ? `?${qs}` : ''}`);
+};
+
+export const getStemStats = (): Promise<StemStats> => {
+  return apiFetch('/stems/stats');
+};
+
+export const getUserStemStats = (): Promise<UserStemStatsResponse> => {
+  return apiFetch('/stems/user-stats');
 };
 
 export async function importStems(formData: FormData): Promise<{ created: number; skipped: number }> {
