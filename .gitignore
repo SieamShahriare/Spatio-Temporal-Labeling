@@ -13,3 +13,6 @@ venv/
 node_modules/
 .next/
 .vercel
+
+
+bun.lock

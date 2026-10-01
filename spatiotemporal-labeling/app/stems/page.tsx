@@ -2,21 +2,102 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { listStems, createBatch, importStems } from '@/lib/api';
-import { StemOut, StemsListResponse } from '@/lib/types';
+import { listStems, createBatch, importStems, getStemStats } from '@/lib/api';
+import { StemOut, StemsListResponse, StemStats } from '@/lib/types';
 import { useAuth } from '@/lib/AuthContext';
 
-type StatusFilter = 'all' | 'available' | 'booked' | 'completed' | 'mine' | 'pending-review' | 're-evaluate' | 'blacklisted';
+type StatusFilter = 'all' | 'available' | 'in-review' | 'pending-review' | 'completed' | 'mine' | 're-evaluate' | 'booked' | 'blacklisted';
 
 const STATUS_OPTIONS: { value: StatusFilter; label: string }[] = [
-  { value: 'all', label: 'All' },
+  { value: 'all', label: 'All Stems' },
   { value: 'available', label: 'Available' },
-  { value: 'booked', label: 'Booked' },
+  { value: 'in-review', label: 'In Review' },
   { value: 'completed', label: 'Completed' },
-  { value: 'mine', label: 'Booked by me' },
-  { value: 'pending-review', label: 'Pending Review' },
   { value: 're-evaluate', label: 'Needs Re-evaluation' },
+  { value: 'booked', label: 'Booked / Locked' },
+  { value: 'mine', label: 'Booked by me' },
   { value: 'blacklisted', label: 'Blacklisted' },
+];
+
+interface StatusTab {
+  value: StatusFilter;
+  label: string;
+  dotColor?: string;
+  activeBg?: string;
+  activeColor?: string;
+  borderColor?: string;
+  badge?: (stats: StemStats | null, total: number) => number | undefined;
+}
+
+const STATUS_TABS: StatusTab[] = [
+  {
+    value: 'all',
+    label: 'All',
+    badge: (stats, total) => stats ? stats.total_stems : total,
+    dotColor: '#6b7280',
+    activeBg: '#374151',
+    activeColor: '#fff',
+    borderColor: '#374151',
+  },
+  {
+    value: 'available',
+    label: 'Available',
+    badge: (stats) => stats ? stats.remaining_stems : undefined,
+    dotColor: '#16a34a',
+    activeBg: '#16a34a',
+    activeColor: '#fff',
+    borderColor: '#16a34a',
+  },
+  {
+    value: 'in-review',
+    label: 'In Review',
+    badge: (stats) => stats ? stats.under_review_stems : undefined,
+    dotColor: '#8b5cf6',
+    activeBg: '#8b5cf6',
+    activeColor: '#fff',
+    borderColor: '#8b5cf6',
+  },
+  {
+    value: 'completed',
+    label: 'Completed',
+    badge: (stats) => stats ? stats.completed_stems : undefined,
+    dotColor: '#059669',
+    activeBg: '#059669',
+    activeColor: '#fff',
+    borderColor: '#059669',
+  },
+  {
+    value: 're-evaluate',
+    label: 'Needs Fix',
+    dotColor: '#f59e0b',
+    activeBg: '#d97706',
+    activeColor: '#fff',
+    borderColor: '#d97706',
+  },
+  {
+    value: 'booked',
+    label: 'Locked',
+    dotColor: '#f59e0b',
+    activeBg: '#b45309',
+    activeColor: '#fff',
+    borderColor: '#b45309',
+  },
+  {
+    value: 'mine',
+    label: 'Booked by me',
+    dotColor: '#2563eb',
+    activeBg: '#2563eb',
+    activeColor: '#fff',
+    borderColor: '#2563eb',
+  },
+  {
+    value: 'blacklisted',
+    label: 'Blacklisted',
+    dotColor: '#ef4444',
+    activeBg: '#dc2626',
+    activeColor: '#fff',
+    borderColor: '#dc2626',
+  },
 ];
 
 function formatWhen(ts: string | null): string {
@@ -203,6 +284,7 @@ export default function StemsPage() {
   const router = useRouter();
   const { user, loading: authLoading } = useAuth();
   const [items, setItems] = useState<StemOut[]>([]);
+  const [stats, setStats] = useState<StemStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [status, setStatus] = useState<StatusFilter>('all');
@@ -231,11 +313,21 @@ export default function StemsPage() {
   useEffect(() => {
     if (!user) return;
     let cancelled = false;
+    getStemStats().then(s => {
+      if (!cancelled) setStats(s);
+    }).catch(() => null);
+    return () => { cancelled = true; };
+  }, [user, refreshKey]);
+
+  useEffect(() => {
+    if (!user) return;
+    let cancelled = false;
     (async () => {
       setLoading(true);
       setError('');
       try {
-        const data: StemsListResponse = await listStems({ search, status, page });
+        const apiStatus = status === 'in-review' ? 'pending-review' : status;
+        const data: StemsListResponse = await listStems({ search, status: apiStatus, page });
         if (!cancelled) {
           setItems(data.items);
           setTotal(data.total);
@@ -260,6 +352,26 @@ export default function StemsPage() {
   }, [user, search, status, page, refreshKey]);
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
+
+  const availableOnPage = items.filter(s => s.state === 'available' || (s.state === 're-evaluate' && !s.locked_until && !s.is_blacklisted));
+  const allAvailableSelected = availableOnPage.length > 0 && availableOnPage.every(s => selected.has(s.id));
+  const someAvailableSelected = availableOnPage.some(s => selected.has(s.id));
+
+  const toggleSelectAllPage = () => {
+    if (allAvailableSelected) {
+      setSelected(prev => {
+        const next = new Set(prev);
+        availableOnPage.forEach(s => next.delete(s.id));
+        return next;
+      });
+    } else {
+      setSelected(prev => {
+        const next = new Set(prev);
+        availableOnPage.forEach(s => next.add(s.id));
+        return next;
+      });
+    }
+  };
 
   const toggleSelect = (id: number, available: boolean) => {
     if (!available) return;
@@ -417,57 +529,32 @@ export default function StemsPage() {
         </div>
       )}
 
+      {/* Batch Building Action Bar */}
       <div style={{
         background: 'var(--surface)',
         border: '1px solid var(--border)',
         borderRadius: 10,
-        padding: 16,
+        padding: '14px 16px',
         marginBottom: 16,
         display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
         gap: 12,
         flexWrap: 'wrap',
-        alignItems: 'center',
       }}>
-        <input
-          type="text"
-          value={search}
-          onChange={e => { setSearch(e.target.value); setPage(1); }}
-          placeholder="Search by text, id, who booked, or who completed…"
-          style={{
-            flex: '1 1 260px',
-            padding: '8px 12px',
-            border: '1px solid var(--border-input)',
-            borderRadius: 6,
-            fontSize: 14,
-            boxSizing: 'border-box',
-          }}
-        />
-        <select
-          value={status}
-          onChange={e => { setStatus(e.target.value as StatusFilter); setPage(1); }}
-          style={{
-            padding: '8px 12px',
-            border: '1px solid var(--border-input)',
-            borderRadius: 6,
-            fontSize: 14,
-            background: 'var(--surface)',
-            color: 'var(--text-primary)',
-          }}
-        >
-          {STATUS_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-        </select>
-        <div style={{ flex: '1 1 100%', display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', flex: '1 1 320px' }}>
+          <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)' }}>Batch Name:</span>
           <input
             type="text"
             value={batchName}
             onChange={e => setBatchName(e.target.value)}
-            placeholder="Batch name"
+            placeholder="Enter batch name (e.g. Set A - News)"
             style={{
-              flex: '1 1 200px',
-              padding: '8px 12px',
+              flex: '1 1 220px',
+              padding: '7px 12px',
               border: '1px solid var(--border-input)',
               borderRadius: 6,
-              fontSize: 14,
+              fontSize: 13,
               boxSizing: 'border-box',
             }}
           />
@@ -475,7 +562,7 @@ export default function StemsPage() {
             onClick={handleBook}
             disabled={booking || selected.size === 0}
             style={{
-              padding: '8px 20px',
+              padding: '7px 18px',
               background: booking || selected.size === 0 ? 'var(--text-disabled)' : '#2563eb',
               color: '#fff',
               border: 'none',
@@ -483,13 +570,181 @@ export default function StemsPage() {
               cursor: booking || selected.size === 0 ? 'not-allowed' : 'pointer',
               fontWeight: 600,
               fontSize: 13,
+              whiteSpace: 'nowrap',
             }}
           >
             {booking ? 'Booking…' : `Book ${selected.size} stem${selected.size !== 1 ? 's' : ''}`}
           </button>
-          <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>
-            {selected.size} selected
-          </span>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 12, color: 'var(--text-muted)' }}>
+          <span><strong>{selected.size}</strong> stem{selected.size !== 1 ? 's' : ''} selected</span>
+          {selected.size > 0 && (
+            <button
+              type="button"
+              onClick={() => setSelected(new Set())}
+              style={{
+                background: 'none',
+                border: 'none',
+                color: '#dc2626',
+                cursor: 'pointer',
+                fontSize: 12,
+                padding: 0,
+                textDecoration: 'underline',
+              }}
+            >
+              Clear all
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Search and Filters */}
+      <div style={{
+        background: 'var(--surface)',
+        border: '1px solid var(--border)',
+        borderRadius: 10,
+        padding: 16,
+        marginBottom: 16,
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 14,
+      }}>
+        {/* Search input and status dropdown */}
+        <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+          <div style={{ flex: '1 1 300px', position: 'relative' }}>
+            <input
+              type="text"
+              value={search}
+              onChange={e => { setSearch(e.target.value); setPage(1); }}
+              placeholder="Search by text, id, who booked, or who completed…"
+              style={{
+                width: '100%',
+                padding: '8px 12px 8px 32px',
+                border: '1px solid var(--border-input)',
+                borderRadius: 6,
+                fontSize: 13,
+                boxSizing: 'border-box',
+              }}
+            />
+            <span style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)', fontSize: 13 }}>
+              🔍
+            </span>
+            {search && (
+              <button
+                onClick={() => { setSearch(''); setPage(1); }}
+                style={{
+                  position: 'absolute',
+                  right: 8,
+                  top: '50%',
+                  transform: 'translateY(-50%)',
+                  background: 'none',
+                  border: 'none',
+                  cursor: 'pointer',
+                  color: 'var(--text-muted)',
+                  fontSize: 14,
+                  padding: 4,
+                }}
+              >
+                ×
+              </button>
+            )}
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>Status:</span>
+            <select
+              value={status === 'pending-review' ? 'in-review' : status}
+              onChange={e => { setStatus(e.target.value as StatusFilter); setPage(1); }}
+              style={{
+                padding: '7px 10px',
+                border: '1px solid var(--border-input)',
+                borderRadius: 6,
+                fontSize: 13,
+                background: 'var(--surface)',
+                color: 'var(--text-primary)',
+              }}
+            >
+              {STATUS_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+            </select>
+          </div>
+        </div>
+
+        {/* Filter Pills / Tabs */}
+        <div>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+            <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-muted)', marginRight: 4 }}>
+              Filter:
+            </span>
+            {STATUS_TABS.map(tab => {
+              const isSelected = (status === tab.value) || (tab.value === 'in-review' && status === 'pending-review');
+              const count = tab.badge?.(stats, total);
+              return (
+                <button
+                  key={tab.value}
+                  type="button"
+                  onClick={() => { setStatus(tab.value); setPage(1); }}
+                  style={{
+                    padding: '5px 12px',
+                    borderRadius: 20,
+                    fontSize: 12,
+                    fontWeight: isSelected ? 600 : 500,
+                    border: isSelected ? `1.5px solid ${tab.borderColor || '#2563eb'}` : '1px solid var(--border)',
+                    background: isSelected ? (tab.activeBg || '#2563eb') : 'var(--surface)',
+                    color: isSelected ? (tab.activeColor || '#fff') : 'var(--text-secondary)',
+                    cursor: 'pointer',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 6,
+                    transition: 'all 0.15s ease',
+                  }}
+                >
+                  {tab.dotColor && (
+                    <span style={{
+                      width: 7,
+                      height: 7,
+                      borderRadius: '50%',
+                      background: isSelected ? 'currentColor' : tab.dotColor,
+                      display: 'inline-block',
+                    }} />
+                  )}
+                  <span>{tab.label}</span>
+                  {typeof count === 'number' && (
+                    <span style={{
+                      padding: '1px 6px',
+                      borderRadius: 10,
+                      fontSize: 11,
+                      fontWeight: 600,
+                      background: isSelected ? 'rgba(255,255,255,0.25)' : 'var(--surface-alt)',
+                      color: isSelected ? 'inherit' : 'var(--text-muted)',
+                    }}>
+                      {count}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Contextual Status Guidance */}
+          <div style={{ marginTop: 10 }}>
+            {status === 'available' && (
+              <div style={{ fontSize: 12, color: '#15803d', display: 'flex', alignItems: 'center', gap: 6, padding: '6px 10px', background: '#dcfce7', borderRadius: 6 }}>
+                <span>✓</span>
+                <span><strong>Available Stems:</strong> Ready to be booked into a batch. Check the stems you want to annotate, name your batch above, and click Book.</span>
+              </div>
+            )}
+            {(status === 'in-review' || status === 'pending-review') && (
+              <div style={{ fontSize: 12, color: '#6d28d9', display: 'flex', alignItems: 'center', gap: 6, padding: '6px 10px', background: '#ede9fe', borderRadius: 6 }}>
+                <span>ⓘ</span>
+                <span><strong>In Review:</strong> Stems submitted by annotators awaiting reviewer evaluation. Stems in review cannot be selected for a new batch until reviewed.</span>
+              </div>
+            )}
+            {status === 'completed' && (
+              <div style={{ fontSize: 12, color: '#047857', display: 'flex', alignItems: 'center', gap: 6, padding: '6px 10px', background: '#d1fae5', borderRadius: 6 }}>
+                <span>✓</span>
+                <span><strong>Completed Stems:</strong> Finalized, reviewer-approved stems. Click &ldquo;👁️ View&rdquo; on any stem to inspect its full annotation in read-only mode.</span>
+              </div>
+            )}
+          </div>
         </div>
       </div>
 
@@ -502,7 +757,22 @@ export default function StemsPage() {
          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
            <thead>
              <tr style={{ background: 'var(--surface-alt)' }}>
-               <th style={th}>Select</th>
+               <th style={{ ...th, width: 80 }}>
+                 <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                   <input
+                     type="checkbox"
+                     disabled={availableOnPage.length === 0}
+                     checked={allAvailableSelected}
+                     ref={el => {
+                       if (el) el.indeterminate = someAvailableSelected && !allAvailableSelected;
+                     }}
+                     onChange={toggleSelectAllPage}
+                     title={availableOnPage.length === 0 ? 'No available stems on this page' : allAvailableSelected ? 'Deselect all visible stems' : 'Select all available stems on this page'}
+                     style={{ cursor: availableOnPage.length === 0 ? 'not-allowed' : 'pointer' }}
+                   />
+                   <span>Select</span>
+                 </div>
+               </th>
                <th style={th}>ID</th>
                <th style={{ ...th, flex: 1 }}>Preview</th>
                <th style={th}>Len</th>
@@ -532,7 +802,17 @@ export default function StemsPage() {
                          type="checkbox"
                          checked={selected.has(s.id)}
                          disabled={!isAvailable}
+                         title={
+                           s.state === 'pending-review'
+                             ? 'In review — cannot book'
+                             : s.state === 'completed'
+                             ? 'Completed — cannot book'
+                             : !isAvailable
+                             ? `Stem is ${s.state}`
+                             : 'Select stem for batch'
+                         }
                          onChange={() => toggleSelect(s.id, isAvailable)}
+                         style={{ cursor: isAvailable ? 'pointer' : 'not-allowed' }}
                        />
                      </td>
                      <td style={td}>{s.id}</td>

@@ -774,7 +774,7 @@ async def list_stems(
         where_clauses.append("s.is_blacklisted = FALSE AND act.owner_id IS NULL AND dn.completed_by IS NULL AND pnd.batch_stem_id IS NULL")
     elif status == "booked":
         where_clauses.append("s.is_blacklisted = FALSE AND act.owner_id IS NOT NULL AND act.status <> 're-evaluate'")
-    elif status == "pending-review":
+    elif status in ("pending-review", "in-review", "in_review", "under-review"):
         where_clauses.append("pnd.batch_stem_id IS NOT NULL")
     elif status == "re-evaluate":
         where_clauses.append("((act.owner_id IS NOT NULL AND act.status = 're-evaluate') OR (act.owner_id IS NULL AND rev.decision = 're-evaluate' AND dn.completed_by IS NULL))")
